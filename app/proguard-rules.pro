@@ -1,0 +1,3 @@
+# Shizuku
+-keep class rikka.shizuku.** { *; }
+-keep class moe.shizuku.** { *; }

@@ -20,3 +20,7 @@ Powerful Android Settings Editor (System, Secure, Global) with Shizuku and Root 
 
 ## Credits
 Developed for power users who need direct control over Android system parameters. 
+
+## Support
+
+- **Now is closed**. I`m working on other projects, and not having time to maintain this. 

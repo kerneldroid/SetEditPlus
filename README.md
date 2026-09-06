@@ -23,4 +23,4 @@ Developed for power users who need direct control over Android system parameters
 
 ## Support
 
-- **Now is closed**. I`m working on other projects, and not having time to maintain this. 
+- Issues, PR are closed. It's a pet project. 

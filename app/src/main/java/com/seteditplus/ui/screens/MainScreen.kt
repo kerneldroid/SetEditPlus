@@ -3,19 +3,19 @@ package com.seteditplus.ui.screens
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,16 +41,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FloatingActionButton
@@ -66,8 +64,10 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -89,7 +89,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.seteditplus.R
 import com.seteditplus.data.SettingsTable
-import com.seteditplus.ui.components.groupedItemShape
 import com.seteditplus.util.HapticUtil
 import com.seteditplus.viewmodel.SettingsViewModel
 import kotlinx.coroutines.launch
@@ -98,10 +97,6 @@ enum class ExtendedTab {
     SYSTEM, SECURE, GLOBAL, MODIFIED
 }
 
-/**
- * Main settings editor screen with tab navigation (System/Secure/Global/Modified),
- * search bar, Settings menu, smart scroll-to-top, and grouped card list of settings.
- */
 @OptIn(
     ExperimentalMaterial3Api::class,
     ExperimentalMaterial3ExpressiveApi::class,
@@ -110,20 +105,18 @@ enum class ExtendedTab {
 @Composable
 fun MainScreen(
     viewModel: SettingsViewModel,
-    onNavigateToSettings: () -> Unit // Callback to open full settings dialog or sheet
+    onNavigateToSettings: () -> Unit
 ) {
     val view = LocalView.current
     val coroutineScope = rememberCoroutineScope()
-    
+
     val currentTab by viewModel.currentTab
-
     val settings = viewModel.filteredSettings
-
     val isLoading by viewModel.isLoading
     val searchQuery by viewModel.searchQuery
     val isSearchActive by viewModel.isSearchActive
     val operationMessage by viewModel.operationMessage
-    
+
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
 
@@ -134,11 +127,13 @@ fun MainScreen(
     var showEditSheet by remember { mutableStateOf(false) }
     var editKey by remember { mutableStateOf("") }
     var editValue by remember { mutableStateOf("") }
+    var editTable by remember { mutableStateOf(SettingsTable.SYSTEM) }
+
     var showAddSheet by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showRestoreConfirm by remember { mutableStateOf(false) }
-    var deleteKey by remember { mutableStateOf("") }
-    var showSettingsMenu by remember { mutableStateOf(false) }
+    var actionKey by remember { mutableStateOf("") }
+    var actionTable by remember { mutableStateOf(SettingsTable.SYSTEM) }
 
     var isTopBarVisible by remember { mutableStateOf(true) }
 
@@ -257,12 +252,19 @@ fun MainScreen(
                         AnimatedContent(
                             targetState = isSearchActive,
                             transitionSpec = {
-                                (fadeIn(tween(300)) + slideInVertically { 40 }).togetherWith(fadeOut(tween(150)) + slideOutVertically { -40 })
+                                (fadeIn(tween(300)) + slideInVertically { 40 }).togetherWith(
+                                    fadeOut(tween(150)) + slideOutVertically { -40 }
+                                )
                             },
                             label = "searchTransition"
                         ) { active ->
                             if (active) {
-                                Row(modifier = Modifier.fillMaxWidth().height(64.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(64.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     val focusRequester = remember { FocusRequester() }
                                     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
@@ -302,7 +304,9 @@ fun MainScreen(
                                 }
                             } else {
                                 Row(
-                                    modifier = Modifier.fillMaxWidth().height(64.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(64.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
@@ -324,7 +328,7 @@ fun MainScreen(
                                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
-                                        
+
                                         IconButton(onClick = {
                                             HapticUtil.performClick(view)
                                             onNavigateToSettings()
@@ -408,8 +412,7 @@ fun MainScreen(
                 }
             } else {
                 val isRefreshing by viewModel.isRefreshing
-                @OptIn(ExperimentalMaterial3Api::class)
-                androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+                PullToRefreshBox(
                     isRefreshing = isRefreshing,
                     onRefresh = { viewModel.refreshSettings() },
                     modifier = Modifier.fillMaxSize()
@@ -421,7 +424,11 @@ fun MainScreen(
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(
-                                    text = if (searchQuery.isNotEmpty()) stringResource(R.string.nothing_found) else stringResource(R.string.no_settings),
+                                    text = if (searchQuery.isNotEmpty()) {
+                                        stringResource(R.string.nothing_found)
+                                    } else {
+                                        stringResource(R.string.no_settings)
+                                    },
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -440,113 +447,124 @@ fun MainScreen(
                             )
                         ) {
                             itemsIndexed(
-                        items = settings,
-                        key = { _, entry -> entry.key }
-                    ) { index, entry ->
-                        val isFirst = index == 0
-                        val isLast = index == settings.size - 1
-                        
-                        val topRadius by androidx.compose.animation.core.animateDpAsState(
-                            targetValue = if (isFirst) 28.dp else 4.dp,
-                            label = "topRadius"
-                        )
-                        val bottomRadius by androidx.compose.animation.core.animateDpAsState(
-                            targetValue = if (isLast) 28.dp else 4.dp,
-                            label = "bottomRadius"
-                        )
-                        val shape = RoundedCornerShape(
-                            topStart = topRadius,
-                            topEnd = topRadius,
-                            bottomStart = bottomRadius,
-                            bottomEnd = bottomRadius
-                        )
+                                items = settings,
+                                key = { _, entry -> entry.uniqueId }
+                            ) { index, entry ->
+                                val isFirst = index == 0
+                                val isLast = index == settings.size - 1
 
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .animateItem(
-                                    fadeInSpec = tween(300),
-                                    fadeOutSpec = tween(300)
+                                val topRadius by animateDpAsState(
+                                    targetValue = if (isFirst) 28.dp else 4.dp,
+                                    label = "topRadius"
                                 )
-                                .padding(vertical = 1.dp)
-                                .clip(shape)
-                                .combinedClickable(
-                                    onClick = {
-                                        HapticUtil.performClick(view)
-                                        if (currentTab != ExtendedTab.MODIFIED) {
-                                            editKey = entry.key
-                                            editValue = entry.value
-                                            showEditSheet = true
-                                        } else {
-                                            val mod = viewModel.modifiedSettingsMap[entry.key]
-                                            if (mod?.isDeleted == true) {
-                                                viewModel.operationMessage.value = "Cannot edit a deleted item, restore it first"
-                                            } else {
-                                                editKey = entry.key
-                                                editValue = entry.value
-                                                showEditSheet = true
+                                val bottomRadius by animateDpAsState(
+                                    targetValue = if (isLast) 28.dp else 4.dp,
+                                    label = "bottomRadius"
+                                )
+                                val shape = RoundedCornerShape(
+                                    topStart = topRadius,
+                                    topEnd = topRadius,
+                                    bottomStart = bottomRadius,
+                                    bottomEnd = bottomRadius
+                                )
+
+                                val modRecord = viewModel.getModifiedSetting(entry.table, entry.key)
+
+                                Surface(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .animateItem(
+                                            fadeInSpec = tween(300),
+                                            fadeOutSpec = tween(300)
+                                        )
+                                        .padding(vertical = 1.dp)
+                                        .clip(shape)
+                                        .combinedClickable(
+                                            onClick = {
+                                                HapticUtil.performClick(view)
+                                                if (currentTab == ExtendedTab.MODIFIED && modRecord?.isDeleted == true) {
+                                                    viewModel.operationMessage.value =
+                                                        "Cannot edit a deleted item, restore it first"
+                                                } else {
+                                                    editKey = entry.key
+                                                    editValue = entry.value
+                                                    editTable = entry.table
+                                                    showEditSheet = true
+                                                }
+                                            },
+                                            onLongClick = {
+                                                HapticUtil.performLongPress(view)
+                                                actionKey = entry.key
+                                                actionTable = entry.table
+                                                if (currentTab == ExtendedTab.MODIFIED) {
+                                                    showRestoreConfirm = true
+                                                } else {
+                                                    showDeleteConfirm = true
+                                                }
                                             }
+                                        ),
+                                    shape = shape,
+                                    color = MaterialTheme.colorScheme.surfaceContainer
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        val isDeletedItem = currentTab == ExtendedTab.MODIFIED &&
+                                            modRecord?.isDeleted == true
+                                        val isAddedItem = currentTab == ExtendedTab.MODIFIED &&
+                                            modRecord != null && modRecord.stockValue == null
+
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = entry.key,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = if (isDeletedItem) {
+                                                    MaterialTheme.colorScheme.error
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurface
+                                                },
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = if (isDeletedItem) {
+                                                    "Deleted"
+                                                } else {
+                                                    entry.value.ifEmpty { stringResource(R.string.empty_value) }
+                                                },
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = when {
+                                                    isDeletedItem -> MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                                                    isAddedItem -> MaterialTheme.colorScheme.primary
+                                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                                },
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
                                         }
-                                    },
-                                    onLongClick = {
-                                        HapticUtil.performLongPress(view)
-                                        deleteKey = entry.key
+                                        Spacer(modifier = Modifier.width(8.dp))
                                         if (currentTab == ExtendedTab.MODIFIED) {
-                                            showRestoreConfirm = true
+                                            Icon(
+                                                imageVector = Icons.Rounded.Restore,
+                                                contentDescription = "Restore",
+                                                modifier = Modifier.size(18.dp),
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                            )
                                         } else {
-                                            showDeleteConfirm = true
+                                            Icon(
+                                                imageVector = Icons.Rounded.Edit,
+                                                contentDescription = stringResource(R.string.cd_edit),
+                                                modifier = Modifier.size(18.dp),
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                            )
                                         }
                                     }
-                                ),
-                            shape = shape,
-                            color = MaterialTheme.colorScheme.surfaceContainer
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                
-                                val isDeletedItem = currentTab == ExtendedTab.MODIFIED && 
-                                                    viewModel.modifiedSettingsMap[entry.key]?.isDeleted == true
-                                val isAddedItem = currentTab == ExtendedTab.MODIFIED && 
-                                                    viewModel.modifiedSettingsMap[entry.key]?.stockValue == null
-
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = entry.key,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = if (isDeletedItem) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = if (isDeletedItem) "Deleted" else entry.value.ifEmpty { stringResource(R.string.empty_value) },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = if (isDeletedItem) MaterialTheme.colorScheme.error.copy(alpha=0.7f) else if (isAddedItem) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                if (currentTab == ExtendedTab.MODIFIED) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Restore,
-                                        contentDescription = "Restore",
-                                        modifier = Modifier.size(18.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Edit,
-                                        contentDescription = stringResource(R.string.cd_edit),
-                                        modifier = Modifier.size(18.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                    )
                                 }
                             }
                         }
@@ -555,52 +573,46 @@ fun MainScreen(
             }
         }
     }
-    }
-    }
 
-    // Edit Setting Sheet
     if (showEditSheet) {
         EditSettingSheet(
             key = editKey,
             currentValue = editValue,
             onDismiss = { showEditSheet = false },
             onSave = { newValue ->
-                viewModel.putSetting(editKey, newValue)
+                viewModel.putSetting(editKey, newValue, editTable)
                 showEditSheet = false
             }
         )
     }
 
-    // Add Setting Sheet
     if (showAddSheet) {
         AddSettingSheet(
             onDismiss = { showAddSheet = false },
             onAdd = { key, value ->
-                viewModel.addSetting(key, value)
+                viewModel.addSetting(key, value, viewModel.currentTable)
                 showAddSheet = false
             }
         )
     }
 
-    // Delete confirmation
     if (showDeleteConfirm) {
         DeleteConfirmDialog(
-            key = deleteKey,
+            key = actionKey,
             onDismiss = { showDeleteConfirm = false },
             onConfirm = {
-                viewModel.deleteSetting(deleteKey)
+                viewModel.deleteSetting(actionKey, actionTable)
                 showDeleteConfirm = false
             }
         )
     }
 
-    // Restore confirmation
     if (showRestoreConfirm) {
         RestoreConfirmDialog(
-            key = deleteKey,
+            key = actionKey,
             onDismiss = { showRestoreConfirm = false },
             onConfirm = {
-                viewModel.restoreSetting(deleteKey)
+                viewModel.restoreSetting(actionKey, actionTable)
                 showRestoreConfirm = false
             }
         )
@@ -615,7 +627,7 @@ fun RestoreConfirmDialog(
 ) {
     val view = LocalView.current
 
-    androidx.compose.material3.AlertDialog(
+    AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -636,7 +648,7 @@ fun RestoreConfirmDialog(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                androidx.compose.material3.TextButton(
+                TextButton(
                     onClick = {
                         HapticUtil.performClick(view)
                         onDismiss()
@@ -645,7 +657,7 @@ fun RestoreConfirmDialog(
                 ) {
                     Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                
+
                 Button(
                     onClick = {
                         HapticUtil.performConfirm(view)
@@ -653,7 +665,7 @@ fun RestoreConfirmDialog(
                     },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(16.dp),
-                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                    colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary
                     )
                 ) {

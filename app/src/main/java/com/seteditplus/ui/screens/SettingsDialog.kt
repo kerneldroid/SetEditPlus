@@ -8,12 +8,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.Icons
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
@@ -22,10 +24,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.seteditplus.R
+import com.seteditplus.data.PermissionMode
 import com.seteditplus.data.ThemeMode
 import com.seteditplus.viewmodel.SettingsViewModel
 
@@ -65,17 +70,25 @@ fun SettingsDialog(
                         ThemeMode.OLED -> R.string.theme_oled
                     }
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .selectable(
+                                selected = currentTheme == mode,
+                                onClick = { viewModel.setTheme(mode) },
+                                role = Role.RadioButton
+                            )
+                            .padding(vertical = 8.dp, horizontal = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         RadioButton(
                             selected = currentTheme == mode,
-                            onClick = { viewModel.setTheme(mode) }
+                            onClick = null
                         )
                         Text(
                             text = stringResource(labelRes),
                             style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.padding(start = 8.dp)
+                            modifier = Modifier.padding(start = 12.dp)
                         )
                     }
                 }
@@ -91,28 +104,34 @@ fun SettingsDialog(
 
                 val currentPermission = viewModel.permissionMode.value
                 val permModes = listOf(
-                    com.seteditplus.data.PermissionMode.ROOT to R.string.btn_root,
-                    com.seteditplus.data.PermissionMode.SHIZUKU to R.string.btn_shizuku
+                    PermissionMode.ROOT to R.string.btn_root,
+                    PermissionMode.SHIZUKU to R.string.btn_shizuku
                 )
 
                 permModes.forEach { (mode, labelRes) ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 4.dp),
+                            .clip(RoundedCornerShape(12.dp))
+                            .selectable(
+                                selected = currentPermission == mode,
+                                onClick = {
+                                    viewModel.selectPermissionMode(mode)
+                                    onDismiss()
+                                },
+                                role = Role.RadioButton
+                            )
+                            .padding(vertical = 8.dp, horizontal = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         RadioButton(
                             selected = currentPermission == mode,
-                            onClick = {
-                                viewModel.selectPermissionMode(mode)
-                                onDismiss()
-                            }
+                            onClick = null
                         )
                         Text(
                             text = stringResource(labelRes),
                             style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.padding(start = 8.dp)
+                            modifier = Modifier.padding(start = 12.dp)
                         )
                     }
                 }
@@ -141,18 +160,18 @@ fun SettingsDialog(
                         onCheckedChange = { viewModel.setAutostart(it) },
                         thumbContent = if (autostart) {
                             {
-                                androidx.compose.material3.Icon(
+                                Icon(
                                     imageVector = Icons.Filled.Check,
                                     contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
+                                    modifier = Modifier.size(16.dp)
                                 )
                             }
                         } else {
                             {
-                                androidx.compose.material3.Icon(
+                                Icon(
                                     imageVector = Icons.Filled.Close,
                                     contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
+                                    modifier = Modifier.size(16.dp)
                                 )
                             }
                         }

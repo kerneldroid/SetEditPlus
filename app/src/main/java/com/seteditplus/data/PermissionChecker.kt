@@ -1,22 +1,36 @@
 package com.seteditplus.data
 
+import android.content.pm.PackageManager
 import rikka.shizuku.Shizuku
+import java.util.concurrent.TimeUnit
 
 /**
- * Checks availability of Root and Shizuku permission modes.
+ * Checks availability of Root and Shizuku permission modes with bounded timeouts.
  */
 object PermissionChecker {
 
+    private const val ROOT_CHECK_TIMEOUT_SECONDS = 8L
+
     /**
-     * Check if device has root access.
+     * Check if device has root access without hanging indefinitely on unresponsive su binaries.
      */
     fun isRootAvailable(): Boolean {
+        var process: Process? = null
         return try {
-            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
-            val exitCode = process.waitFor()
-            exitCode == 0
-        } catch (e: Exception) {
+            process = ProcessBuilder("su", "-c", "id")
+                .redirectErrorStream(true)
+                .start()
+            val completed = process.waitFor(ROOT_CHECK_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            if (!completed) {
+                process.destroyForcibly()
+                return false
+            }
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            process.exitValue() == 0 && output.contains("uid=0")
+        } catch (_: Exception) {
             false
+        } finally {
+            process?.destroy()
         }
     }
 
@@ -26,7 +40,7 @@ object PermissionChecker {
     fun isShizukuAvailable(): Boolean {
         return try {
             Shizuku.pingBinder()
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }
@@ -36,8 +50,9 @@ object PermissionChecker {
      */
     fun isShizukuPermissionGranted(): Boolean {
         return try {
-            Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
-        } catch (e: Exception) {
+            if (!isShizukuAvailable()) return false
+            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+        } catch (_: Exception) {
             false
         }
     }

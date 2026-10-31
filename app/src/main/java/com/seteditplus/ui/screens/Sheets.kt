@@ -1,15 +1,18 @@
 package com.seteditplus.ui.screens
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -18,18 +21,23 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.res.stringResource
 import com.seteditplus.R
+import com.seteditplus.data.SettingsRepository
 import com.seteditplus.util.HapticUtil
 
 /**
@@ -44,7 +52,7 @@ fun EditSettingSheet(
     onSave: (String) -> Unit
 ) {
     val view = LocalView.current
-    var newValue by remember { mutableStateOf(currentValue) }
+    var newValue by remember(key, currentValue) { mutableStateOf(currentValue) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
@@ -57,27 +65,21 @@ fun EditSettingSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 12.dp),
-                horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                androidx.compose.foundation.layout.Box(
+                Box(
                     modifier = Modifier
                         .height(4.dp)
                         .fillMaxWidth(0.12f)
-                        .padding(horizontal = 0.dp)
-                        .then(
-                            Modifier
-                                .height(4.dp)
-                                .fillMaxWidth()
-                        )
                 ) {
-                    androidx.compose.foundation.Canvas(
+                    Canvas(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(4.dp)
                     ) {
                         drawRoundRect(
-                            color = androidx.compose.ui.graphics.Color.Gray.copy(alpha = 0.4f),
-                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx())
+                            color = Color.Gray.copy(alpha = 0.4f),
+                            cornerRadius = CornerRadius(2.dp.toPx())
                         )
                     }
                 }
@@ -165,6 +167,7 @@ fun AddSettingSheet(
     val view = LocalView.current
     var key by remember { mutableStateOf("") }
     var value by remember { mutableStateOf("") }
+    val isKeyValid = key.isNotBlank() && SettingsRepository.isValidKey(key.trim())
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
@@ -193,6 +196,7 @@ fun AddSettingSheet(
                 value = key,
                 onValueChange = { key = it },
                 label = { Text(stringResource(R.string.label_key)) },
+                isError = key.isNotBlank() && !isKeyValid,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
                 singleLine = true,
@@ -220,7 +224,7 @@ fun AddSettingSheet(
 
             Button(
                 onClick = {
-                    if (key.isNotBlank()) {
+                    if (isKeyValid) {
                         HapticUtil.performConfirm(view)
                         onAdd(key.trim(), value)
                     } else {
@@ -234,7 +238,7 @@ fun AddSettingSheet(
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary
                 ),
-                enabled = key.isNotBlank()
+                enabled = isKeyValid
             ) {
                 Text(
                     text = stringResource(R.string.btn_add),
@@ -257,7 +261,7 @@ fun DeleteConfirmDialog(
 ) {
     val view = LocalView.current
 
-    androidx.compose.material3.AlertDialog(
+    AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -278,7 +282,7 @@ fun DeleteConfirmDialog(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                androidx.compose.material3.TextButton(
+                TextButton(
                     onClick = {
                         HapticUtil.performClick(view)
                         onDismiss()
@@ -287,7 +291,7 @@ fun DeleteConfirmDialog(
                 ) {
                     Text(stringResource(R.string.btn_cancel), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                
+
                 Button(
                     onClick = {
                         HapticUtil.performConfirm(view)

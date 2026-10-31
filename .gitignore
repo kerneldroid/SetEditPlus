@@ -22,18 +22,4 @@ gradle-app.setting
 .gradle
 /build
 /app/build
-
-# User-specific
-.antigravity/
-.antigravitycli/
-Icon_Philosophy.md
-Material3_Philosophy.md
-generate_icons.py
-generate_svg_icons.py
-concept_1.svg
-concept_2.svg
-concept_3.svg
-EOF
-generate_icons.py
-generate_svg_icons.py
 compiled_res/

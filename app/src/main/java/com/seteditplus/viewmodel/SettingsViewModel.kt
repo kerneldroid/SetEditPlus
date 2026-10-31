@@ -17,10 +17,12 @@ import com.seteditplus.data.SettingsRepository
 import com.seteditplus.data.SettingsTable
 import com.seteditplus.data.ThemeMode
 import com.seteditplus.ui.screens.ExtendedTab
-import rikka.shizuku.Shizuku
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import rikka.shizuku.Shizuku
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -40,21 +42,21 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     val filteredSettings = mutableStateListOf<SettingsEntry>()
 
     /**
-     * Cached modified settings map to avoid re-reading SharedPreferences per list item.
+     * Cached modified settings map keyed by composite "${table}:${key}" to prevent cross-table collisions.
      */
     val modifiedSettingsMap = mutableStateMapOf<String, ModifiedSetting>()
 
     val searchQuery = mutableStateOf("")
     val isSearchActive = mutableStateOf(false)
-
     val isLoading = mutableStateOf(false)
-
+    val isRefreshing = mutableStateOf(false)
     val operationMessage = mutableStateOf<String?>(null)
 
     private var repository: SettingsRepository? = null
+    private var searchJob: Job? = null
 
     private val shizukuListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
-        if (requestCode == 101) {
+        if (requestCode == SHIZUKU_PERMISSION_REQUEST_CODE) {
             if (grantResult == PackageManager.PERMISSION_GRANTED) {
                 viewModelScope.launch {
                     finalizePermissionSuccess(PermissionMode.SHIZUKU)
@@ -70,7 +72,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         try {
             Shizuku.addRequestPermissionResultListener(shizukuListener)
         } catch (e: Exception) {
-            Log.w("SettingsViewModel", "Shizuku listener registration failed", e)
+            Log.w(TAG, "Shizuku listener registration failed", e)
         }
 
         permissionMode.value?.let { mode ->
@@ -83,45 +85,53 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         try {
             Shizuku.removeRequestPermissionResultListener(shizukuListener)
         } catch (e: Exception) {
-            Log.w("SettingsViewModel", "Shizuku listener removal failed", e)
+            Log.w(TAG, "Shizuku listener removal failed", e)
         }
     }
 
-    /**
-     * Attempt to set the permission mode (Root or Shizuku).
-     */
+    fun getModifiedSetting(table: SettingsTable, key: String): ModifiedSetting? {
+        return modifiedSettingsMap[ModifiedSetting.uniqueKey(table, key)]
+    }
+
     fun selectPermissionMode(mode: PermissionMode) {
         viewModelScope.launch {
             isLoading.value = true
             permissionError.value = null
 
-            if (mode == PermissionMode.ROOT) {
-                val available = withContext(Dispatchers.IO) { PermissionChecker.isRootAvailable() }
-                if (available) {
-                    finalizePermissionSuccess(mode)
-                } else {
-                    permissionError.value = "Root access not detected. Try using Shizuku."
-                    isPermissionGranted.value = false
-                    isLoading.value = false
-                }
-            } else if (mode == PermissionMode.SHIZUKU) {
-                val available = withContext(Dispatchers.IO) { PermissionChecker.isShizukuAvailable() }
-                if (!available) {
-                    permissionError.value = "Shizuku is not running."
-                    isPermissionGranted.value = false
-                    isLoading.value = false
-                    return@launch
-                }
-                
-                val granted = withContext(Dispatchers.IO) { PermissionChecker.isShizukuPermissionGranted() }
-                if (granted) {
-                    finalizePermissionSuccess(mode)
-                } else {
-                    try {
-                        Shizuku.requestPermission(101)
-                    } catch (e: Exception) {
-                        permissionError.value = "Shizuku request error: ${e.message}"
+            when (mode) {
+                PermissionMode.ROOT -> {
+                    val available = withContext(Dispatchers.IO) { PermissionChecker.isRootAvailable() }
+                    if (available) {
+                        finalizePermissionSuccess(mode)
+                    } else {
+                        permissionError.value = "Root access not detected. Try using Shizuku."
+                        if (repository == null) {
+                            isPermissionGranted.value = false
+                        }
                         isLoading.value = false
+                    }
+                }
+                PermissionMode.SHIZUKU -> {
+                    val available = withContext(Dispatchers.IO) { PermissionChecker.isShizukuAvailable() }
+                    if (!available) {
+                        permissionError.value = "Shizuku is not running."
+                        if (repository == null) {
+                            isPermissionGranted.value = false
+                        }
+                        isLoading.value = false
+                        return@launch
+                    }
+
+                    val granted = withContext(Dispatchers.IO) { PermissionChecker.isShizukuPermissionGranted() }
+                    if (granted) {
+                        finalizePermissionSuccess(mode)
+                    } else {
+                        try {
+                            Shizuku.requestPermission(SHIZUKU_PERMISSION_REQUEST_CODE)
+                        } catch (e: Exception) {
+                            permissionError.value = "Shizuku request error: ${e.message}"
+                            isLoading.value = false
+                        }
                     }
                 }
             }
@@ -148,21 +158,23 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun resetPreferences() {
-        val repo = repository ?: return
+        val repo = repository
         val mods = preferences.getModifiedSettings()
 
         viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                mods.forEach { mod ->
-                    try {
-                        val table = try { SettingsTable.valueOf(mod.table) } catch (e: Exception) { SettingsTable.SYSTEM }
-                        if (mod.stockValue == null) {
-                            repo.delete(table, mod.key)
-                        } else {
-                            repo.put(table, mod.key, mod.stockValue)
+            if (repo != null && mods.isNotEmpty()) {
+                withContext(Dispatchers.IO) {
+                    mods.forEach { mod ->
+                        try {
+                            val table = mod.settingsTable
+                            if (mod.stockValue == null) {
+                                repo.delete(table, mod.key)
+                            } else {
+                                repo.put(table, mod.key, mod.stockValue)
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to restore ${mod.key}", e)
                         }
-                    } catch (e: Exception) {
-                        Log.e("SettingsViewModel", "Failed to restore ${mod.key}", e)
                     }
                 }
             }
@@ -172,13 +184,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 isAutostartEnabled.value = false
                 permissionMode.value = null
                 isPermissionGranted.value = false
+                repository = null
+                _allSettings.clear()
+                filteredSettings.clear()
                 modifiedSettingsMap.clear()
                 operationMessage.value = "Preferences reset to stock"
             }
         }
     }
-
-    val isRefreshing = mutableStateOf(false)
 
     fun refreshSettings() {
         if (repository == null) return
@@ -186,29 +199,16 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             isRefreshing.value = true
             loadSettingsInternal()
             withContext(Dispatchers.Main) {
-                kotlinx.coroutines.delay(400)
+                delay(300)
                 isRefreshing.value = false
             }
         }
     }
 
-    /**
-     * Switch to a different settings table or Modified tab.
-     */
-    fun switchTable(table: SettingsTable) {
-        currentTab.value = when(table) {
-            SettingsTable.SYSTEM -> ExtendedTab.SYSTEM
-            SettingsTable.SECURE -> ExtendedTab.SECURE
-            SettingsTable.GLOBAL -> ExtendedTab.GLOBAL
-        }
-        currentTable = table
-        loadSettings()
-    }
-
     fun switchTab(tab: ExtendedTab) {
         currentTab.value = tab
         if (tab != ExtendedTab.MODIFIED) {
-            currentTable = when(tab) {
+            currentTable = when (tab) {
                 ExtendedTab.SYSTEM -> SettingsTable.SYSTEM
                 ExtendedTab.SECURE -> SettingsTable.SECURE
                 ExtendedTab.GLOBAL -> SettingsTable.GLOBAL
@@ -218,9 +218,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         loadSettings()
     }
 
-    /**
-     * Load settings for the current table or Modified tab.
-     */
     fun loadSettings() {
         if (repository == null) return
         viewModelScope.launch {
@@ -236,18 +233,18 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             val modified = withContext(Dispatchers.IO) { preferences.getModifiedSettings() }
             withContext(Dispatchers.Main) {
                 modifiedSettingsMap.clear()
-                modified.forEach { modifiedSettingsMap[it.key] = it }
+                modified.forEach { modifiedSettingsMap[it.uniqueId] = it }
             }
 
             if (currentTab.value == ExtendedTab.MODIFIED) {
                 val liveEntries = withContext(Dispatchers.IO) {
                     modified.map { mod ->
-                        val table = try { SettingsTable.valueOf(mod.table) } catch (e: Exception) { SettingsTable.SYSTEM }
+                        val table = mod.settingsTable
                         if (mod.isDeleted) {
-                            SettingsEntry(mod.key, "")
+                            SettingsEntry(mod.key, "", table)
                         } else {
                             val liveValue = repo.get(table, mod.key) ?: mod.value
-                            SettingsEntry(mod.key, liveValue)
+                            SettingsEntry(mod.key, liveValue, table)
                         }
                     }
                 }
@@ -256,142 +253,130 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                     _allSettings.addAll(liveEntries)
                 }
             } else {
+                val tableToLoad = currentTable
                 val entries = withContext(Dispatchers.IO) {
-                    repo.getAll(currentTable)
+                    repo.getAll(tableToLoad)
                 }
                 withContext(Dispatchers.Main) {
                     _allSettings.clear()
                     _allSettings.addAll(entries)
                 }
             }
-            
+
             applyFilter()
         } catch (e: Exception) {
-            Log.e("SettingsViewModel", "Error loading settings", e)
+            Log.e(TAG, "Error loading settings", e)
             withContext(Dispatchers.Main) {
                 operationMessage.value = "Load error: ${e.message}"
             }
         }
     }
 
-    private var searchJob: kotlinx.coroutines.Job? = null
-
     fun onSearchQueryChanged(query: String) {
         searchQuery.value = query
         searchJob?.cancel()
         searchJob = viewModelScope.launch {
-            kotlinx.coroutines.delay(150)
+            delay(150)
             applyFilter()
         }
     }
 
     private suspend fun applyFilter() {
-        val query = searchQuery.value.lowercase()
+        val query = searchQuery.value.trim().lowercase()
+        val snapshot = _allSettings.toList()
         val result = withContext(Dispatchers.Default) {
             if (query.isEmpty()) {
-                _allSettings.toList()
+                snapshot
             } else {
-                _allSettings.filter {
-                    it.key.lowercase().contains(query) || it.value.lowercase().contains(query)
+                snapshot.filter {
+                    it.key.lowercase().contains(query) ||
+                        it.value.lowercase().contains(query) ||
+                        it.table.displayName.lowercase().contains(query)
                 }
             }
         }
-        
+
         withContext(Dispatchers.Main) {
             filteredSettings.clear()
             filteredSettings.addAll(result)
         }
     }
 
-    /**
-     * Put/update a setting value.
-     */
-    fun putSetting(key: String, value: String) {
+    fun putSetting(key: String, value: String, table: SettingsTable = currentTable) {
         val repo = repository ?: return
-        var targetTable = currentTable
-        var stockValue: String? = null
-        
-        if (currentTab.value == ExtendedTab.MODIFIED) {
-            val mod = preferences.getModifiedSettings().find { it.key == key }
-            if (mod != null) {
-                targetTable = try { SettingsTable.valueOf(mod.table) } catch (e: Exception) { currentTable }
-                stockValue = mod.stockValue
-            }
-        } else {
-            stockValue = _allSettings.find { it.key == key }?.value
-            
-            val existingMod = preferences.getModifiedSettings().find { it.key == key }
-            if (existingMod != null) {
-                stockValue = existingMod.stockValue
-            }
+        val trimmedKey = key.trim()
+        if (!SettingsRepository.isValidKey(trimmedKey)) {
+            operationMessage.value = "Error: Invalid setting key format"
+            return
         }
 
+        val existingMod = preferences.getModifiedSettings()
+            .find { it.settingsTable == table && it.key == trimmedKey }
+
         viewModelScope.launch {
+            val stockValue = withContext(Dispatchers.IO) {
+                when {
+                    existingMod != null -> existingMod.stockValue
+                    currentTab.value != ExtendedTab.MODIFIED && table == currentTable ->
+                        _allSettings.find { it.table == table && it.key == trimmedKey }?.value
+                            ?: repo.get(table, trimmedKey)
+                    else -> repo.get(table, trimmedKey)
+                }
+            }
+
             val success = withContext(Dispatchers.IO) {
-                repo.put(targetTable, key, value)
+                repo.put(table, trimmedKey, value)
             }
             if (success) {
                 withContext(Dispatchers.Main) {
-                    val mod = ModifiedSetting(targetTable.name, key, value, stockValue, false)
+                    val mod = ModifiedSetting(table.name, trimmedKey, value, stockValue, false)
                     preferences.addModifiedSetting(mod)
-                    modifiedSettingsMap[key] = mod
-                    operationMessage.value = "✓ Setting saved"
+                    val refreshedMods = preferences.getModifiedSettings()
+                    modifiedSettingsMap.clear()
+                    refreshedMods.forEach { modifiedSettingsMap[it.uniqueId] = it }
+                    operationMessage.value = "✓ Value updated"
                     loadSettings()
                 }
             } else {
                 withContext(Dispatchers.Main) {
-                    operationMessage.value = "Error: System rejected the change"
+                    operationMessage.value = "✗ Error writing setting"
                 }
             }
         }
     }
 
-    /**
-     * Delete a setting. Instead of removing from tracking, we mark it as deleted to show in the Modified tab.
-     */
-    fun deleteSetting(key: String) {
+    fun deleteSetting(key: String, table: SettingsTable = currentTable) {
         val repo = repository ?: return
-        var targetTable = currentTable
-        var stockValue: String? = null
-
-        if (currentTab.value == ExtendedTab.MODIFIED) {
-            val mod = preferences.getModifiedSettings().find { it.key == key }
-            if (mod != null) {
-                targetTable = try { SettingsTable.valueOf(mod.table) } catch (e: Exception) { currentTable }
-                stockValue = mod.stockValue
-            }
-        } else {
-            val existingMod = preferences.getModifiedSettings().find { it.key == key }
-            stockValue = existingMod?.stockValue ?: _allSettings.find { it.key == key }?.value
-        }
+        val existingMod = preferences.getModifiedSettings()
+            .find { it.settingsTable == table && it.key == key }
+        val stockValue = existingMod?.stockValue
+            ?: _allSettings.find { it.table == table && it.key == key }?.value
 
         viewModelScope.launch {
             val success = withContext(Dispatchers.IO) {
-                repo.delete(targetTable, key)
+                repo.delete(table, key)
             }
             if (success) {
                 withContext(Dispatchers.Main) {
-                    val mod = ModifiedSetting(targetTable.name, key, "", stockValue, true)
+                    val mod = ModifiedSetting(table.name, key, "", stockValue, true)
                     preferences.addModifiedSetting(mod)
-                    modifiedSettingsMap[key] = mod
+                    modifiedSettingsMap[mod.uniqueId] = mod
                     operationMessage.value = "✓ Setting deleted"
                     loadSettings()
                 }
             } else {
                 withContext(Dispatchers.Main) {
-                    operationMessage.value = "Error: System rejected deletion"
+                    operationMessage.value = "✗ Error deleting setting"
                 }
             }
         }
     }
 
-    /**
-     * Restore a setting back to its stock value, or delete it if it was newly added.
-     */
-    fun restoreSetting(key: String) {
+    fun restoreSetting(key: String, table: SettingsTable = currentTable) {
         val repo = repository ?: return
-        val mod = preferences.getModifiedSettings().find { it.key == key } ?: return
-        val targetTable = try { SettingsTable.valueOf(mod.table) } catch (e: Exception) { SettingsTable.SYSTEM }
+        val mod = preferences.getModifiedSettings()
+            .find { it.settingsTable == table && it.key == key } ?: return
+        val targetTable = mod.settingsTable
 
         viewModelScope.launch {
             val success = withContext(Dispatchers.IO) {
@@ -403,8 +388,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             }
             if (success) {
                 withContext(Dispatchers.Main) {
-                    preferences.removeModifiedSetting(mod.table, key)
-                    modifiedSettingsMap.remove(key)
+                    preferences.removeModifiedSetting(targetTable.name, key)
+                    modifiedSettingsMap.remove(mod.uniqueId)
                     operationMessage.value = "✓ Setting restored to stock"
                     loadSettings()
                 }
@@ -416,14 +401,16 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    /**
-     * Add a new setting.
-     */
-    fun addSetting(key: String, value: String) {
-        putSetting(key, value)
+    fun addSetting(key: String, value: String, table: SettingsTable = currentTable) {
+        putSetting(key, value, table)
     }
 
     fun clearMessage() {
         operationMessage.value = null
+    }
+
+    companion object {
+        private const val TAG = "SettingsViewModel"
+        private const val SHIZUKU_PERMISSION_REQUEST_CODE = 101
     }
 }

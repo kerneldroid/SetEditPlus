@@ -3,152 +3,122 @@ package com.seteditplus.data
 import android.content.Context
 import android.util.Log
 import rikka.shizuku.Shizuku
+import java.util.concurrent.TimeUnit
 
 /**
  * Repository that reads/writes Android Settings via Root or Shizuku.
- *
- * Root mode uses `settings` CLI commands via su.
- * Shizuku mode uses content resolver after granting Shizuku permission.
  */
 class SettingsRepository(
-    private val context: Context,
+    @Suppress("unused") private val context: Context,
     private val mode: PermissionMode
 ) {
+
+    data class CommandResult(
+        val exitCode: Int,
+        val stdout: String,
+        val stderr: String
+    ) {
+        val isSuccess: Boolean
+            get() = exitCode == 0 && !hasSecurityOrCommandError(stdout) && !hasSecurityOrCommandError(stderr)
+
+        val errorMessage: String?
+            get() = when {
+                isSuccess -> null
+                stderr.isNotBlank() -> stderr.lineSequence().firstOrNull { it.isNotBlank() }?.trim()
+                stdout.isNotBlank() && hasSecurityOrCommandError(stdout) ->
+                    stdout.lineSequence().firstOrNull { it.isNotBlank() }?.trim()
+                else -> "Command exited with code $exitCode"
+            }
+
+        companion object {
+            private val ERROR_MARKERS = listOf(
+                "SecurityException",
+                "Permission denial",
+                "Permission Denial",
+                "IllegalArgumentException",
+                "Exception occurred",
+                "Failure calling service",
+                "Error:",
+                "Invalid table"
+            )
+
+            fun hasSecurityOrCommandError(text: String): Boolean {
+                if (text.isBlank()) return false
+                return ERROR_MARKERS.any { marker -> text.contains(marker, ignoreCase = true) }
+            }
+        }
+    }
 
     /**
      * Read all settings from the given table.
      */
     fun getAll(table: SettingsTable): List<SettingsEntry> {
-        return when (mode) {
-            PermissionMode.ROOT -> getAllViaRoot(table)
-            PermissionMode.SHIZUKU -> getAllViaShizuku(table)
+        val result = executeSettingsCommand(arrayOf("settings", "list", table.cliName))
+        if (!result.isSuccess && result.stdout.isBlank()) {
+            throw IllegalStateException(result.errorMessage ?: "Failed to read ${table.displayName} table")
         }
+        return parseSettingsList(result.stdout, table)
     }
 
     /**
      * Read a single setting.
      */
     fun get(table: SettingsTable, key: String): String? {
-        return when (mode) {
-            PermissionMode.ROOT -> getViaRoot(table, key)
-            PermissionMode.SHIZUKU -> getViaShizuku(table, key)
-        }
+        if (!isValidKey(key)) return null
+        val result = executeSettingsCommand(arrayOf("settings", "get", table.cliName, key))
+        if (!result.isSuccess) return null
+        val trimmed = result.stdout.trimEnd('\r', '\n')
+        return if (trimmed == "null" || trimmed.isEmpty()) null else trimmed
     }
 
     /**
-     * Write (put) a setting.
+     * Write (put) a setting and verify command success.
      */
     fun put(table: SettingsTable, key: String, value: String): Boolean {
-        return when (mode) {
-            PermissionMode.ROOT -> putViaRoot(table, key, value)
-            PermissionMode.SHIZUKU -> putViaShizuku(table, key, value)
-        }
+        if (!isValidKey(key)) return false
+        val result = executeSettingsCommand(buildPutArgs(table, key, value))
+        return result.isSuccess
     }
 
     /**
-     * Delete a setting.
+     * Delete a setting and verify command success.
      */
     fun delete(table: SettingsTable, key: String): Boolean {
+        if (!isValidKey(key)) return false
+        val result = executeSettingsCommand(arrayOf("settings", "delete", table.cliName, key))
+        return result.isSuccess
+    }
+
+    private fun buildPutArgs(table: SettingsTable, key: String, value: String): Array<String> {
+        // Android's `settings` command treats values starting with '-' as options unless handled
+        return arrayOf("settings", "put", table.cliName, key, value)
+    }
+
+    private fun executeSettingsCommand(args: Array<String>): CommandResult {
         return when (mode) {
-            PermissionMode.ROOT -> deleteViaRoot(table, key)
-            PermissionMode.SHIZUKU -> deleteViaShizuku(table, key)
+            PermissionMode.ROOT -> executeRootCommand(args)
+            PermissionMode.SHIZUKU -> executeShizukuCommand(args)
         }
     }
 
-    private fun getAllViaRoot(table: SettingsTable): List<SettingsEntry> {
-        val tableName = table.name.lowercase()
-        val result = executeRootCommand(arrayOf("settings", "list", tableName))
-        return parseSettingsList(result)
-    }
-
-    private fun getViaRoot(table: SettingsTable, key: String): String? {
-        val tableName = table.name.lowercase()
-        val result = executeRootCommand(arrayOf("settings", "get", tableName, key)).trim()
-        return if (result == "null" || result.isEmpty()) null else result
-    }
-
-    private fun putViaRoot(table: SettingsTable, key: String, value: String): Boolean {
-        val tableName = table.name.lowercase()
+    private fun executeRootCommand(args: Array<String>): CommandResult {
+        val escapedCommand = args.joinToString(" ") { arg -> escapeShellArg(arg) }
+        var process: Process? = null
         return try {
-            executeRootCommand(arrayOf("settings", "put", tableName, key, value))
-            true
+            process = Runtime.getRuntime().exec(arrayOf("su", "-c", escapedCommand))
+            collectProcessOutput(process)
         } catch (e: Exception) {
-            false
-        }
-    }
-
-    private fun deleteViaRoot(table: SettingsTable, key: String): Boolean {
-        val tableName = table.name.lowercase()
-        return try {
-            executeRootCommand(arrayOf("settings", "delete", tableName, key))
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    private fun executeRootCommand(args: Array<String>): String {
-        /**
-         * 'su -c' evaluates the command in a shell. 
-         * Arguments are properly quoted to prevent command injection.
-         */
-        val escapedCommand = args.joinToString(" ") { arg ->
-            "'" + arg.replace("'", "'\\''") + "'"
-        }
-
-        val process = Runtime.getRuntime().exec(arrayOf("su", "-c", escapedCommand))
-        return try {
-            val stderrThread = Thread { process.errorStream.use { it.readBytes() } }
-            stderrThread.start()
-            val output = process.inputStream.bufferedReader().use { it.readText() }
-            process.waitFor()
-            stderrThread.join(3000)
-            output
+            Log.e(TAG, "Root command execution failed", e)
+            CommandResult(exitCode = -1, stdout = "", stderr = e.message ?: "Root execution error")
         } finally {
-            process.destroy()
+            process?.destroy()
         }
     }
 
-    private fun getAllViaShizuku(table: SettingsTable): List<SettingsEntry> {
+    private fun executeShizukuCommand(args: Array<String>): CommandResult {
+        var process: Process? = null
         return try {
-            val result = executeShizukuCommand(arrayOf("settings", "list", table.name.lowercase()))
-            parseSettingsList(result)
-        } catch (e: Exception) {
-            Log.e("SettingsRepository", "Failed to list via Shizuku", e)
-            emptyList()
-        }
-    }
-
-    private fun getViaShizuku(table: SettingsTable, key: String): String? {
-        return try {
-            val result = executeShizukuCommand(arrayOf("settings", "get", table.name.lowercase(), key)).trim()
-            if (result == "null" || result.isEmpty()) null else result
-        } catch (e: Exception) {
-            Log.e("SettingsRepository", "Failed to get via Shizuku", e)
-            null
-        }
-    }
-
-    private fun putViaShizuku(table: SettingsTable, key: String, value: String): Boolean {
-        return try {
-            executeShizukuCommand(arrayOf("settings", "put", table.name.lowercase(), key, value))
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    private fun deleteViaShizuku(table: SettingsTable, key: String): Boolean {
-        return try {
-            executeShizukuCommand(arrayOf("settings", "delete", table.name.lowercase(), key))
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    private fun executeShizukuCommand(args: Array<String>): String {
-        return try {
+            val escapedCommand = args.joinToString(" ") { arg -> escapeShellArg(arg) }
             val method = Shizuku::class.java.getDeclaredMethod(
                 "newProcess",
                 Array<String>::class.java,
@@ -156,53 +126,93 @@ class SettingsRepository(
                 String::class.java
             )
             method.isAccessible = true
-            val process = method.invoke(null, args, null, null) as Process
-            try {
-                val stderrThread = Thread { 
-                    val errorOutput = process.errorStream.bufferedReader().use { it.readText() }
-                    if (errorOutput.contains("SecurityException", ignoreCase = true) || 
-                        errorOutput.contains("Permission Denial", ignoreCase = true)) {
-                        Log.e("SettingsRepository", "Android 17+ Security Restriction: $errorOutput")
-                    }
-                }
-                stderrThread.start()
-                val output = process.inputStream.bufferedReader().use { it.readText() }
-                process.waitFor()
-                stderrThread.join(1000)
-                output
-            } finally {
-                process.destroy()
+            process = method.invoke(null, arrayOf("sh", "-c", escapedCommand), null, null) as Process
+            val result = collectProcessOutput(process)
+            if (!result.isSuccess) {
+                Log.w(TAG, "Shizuku command warning/error: ${result.errorMessage}")
             }
+            result
         } catch (e: Exception) {
-            Log.e("SettingsRepository", "Shizuku command failed", e)
-            ""
+            Log.e(TAG, "Shizuku command failed", e)
+            CommandResult(exitCode = -1, stdout = "", stderr = e.message ?: "Shizuku execution error")
+        } finally {
+            process?.destroy()
         }
     }
 
-    private fun parseSettingsList(raw: String): List<SettingsEntry> {
-        val result = mutableListOf<SettingsEntry>()
-        val lines = raw.lines()
-        var currentKey: String? = null
-        var currentValue: StringBuilder? = null
+    private fun collectProcessOutput(process: Process): CommandResult {
+        var stderrText = ""
+        val stderrThread = Thread {
+            stderrText = try {
+                process.errorStream.bufferedReader().use { it.readText() }
+            } catch (_: Exception) {
+                ""
+            }
+        }
+        stderrThread.start()
+        val stdoutText = try {
+            process.inputStream.bufferedReader().use { it.readText() }
+        } catch (_: Exception) {
+            ""
+        }
+        val finished = process.waitFor(COMMAND_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        if (!finished) {
+            process.destroyForcibly()
+            stderrThread.join(500)
+            return CommandResult(exitCode = -1, stdout = stdoutText, stderr = "Command timed out")
+        }
+        stderrThread.join(2000)
+        return CommandResult(
+            exitCode = process.exitValue(),
+            stdout = stdoutText,
+            stderr = stderrText
+        )
+    }
 
-        for (line in lines) {
-            val idx = line.indexOf('=')
-            if (idx != -1) {
-                if (currentKey != null && currentValue != null) {
-                    result.add(SettingsEntry(currentKey, currentValue.toString()))
-                }
-                currentKey = line.substring(0, idx)
-                currentValue = StringBuilder(line.substring(idx + 1))
-            } else {
-                if (currentValue != null) {
+    companion object {
+        private const val TAG = "SettingsRepository"
+        private const val COMMAND_TIMEOUT_SECONDS = 15L
+        private val VALID_KEY_REGEX = Regex("^[A-Za-z0-9_.:-]+$")
+
+        fun isValidKey(key: String): Boolean {
+            return key.isNotBlank() && VALID_KEY_REGEX.matches(key)
+        }
+
+        fun escapeShellArg(arg: String): String {
+            return "'" + arg.replace("'", "'\\''") + "'"
+        }
+
+        /**
+         * Parses `settings list <table>` output without corrupting the final item with a trailing newline
+         * and without splitting multi-line values that happen to contain `=` on continuation lines.
+         */
+        fun parseSettingsList(raw: String, table: SettingsTable = SettingsTable.SYSTEM): List<SettingsEntry> {
+            val cleaned = raw.trimEnd('\r', '\n')
+            if (cleaned.isEmpty()) return emptyList()
+
+            val result = mutableListOf<SettingsEntry>()
+            val lines = cleaned.lines()
+            var currentKey: String? = null
+            var currentValue: StringBuilder? = null
+
+            for (line in lines) {
+                val idx = line.indexOf('=')
+                val candidateKey = if (idx > 0) line.substring(0, idx) else null
+                if (candidateKey != null && isValidKey(candidateKey)) {
+                    if (currentKey != null && currentValue != null) {
+                        result.add(SettingsEntry(currentKey, currentValue.toString(), table))
+                    }
+                    currentKey = candidateKey
+                    currentValue = StringBuilder(line.substring(idx + 1))
+                } else if (currentValue != null) {
                     currentValue.append("\n").append(line)
                 }
             }
+            if (currentKey != null && currentValue != null) {
+                result.add(SettingsEntry(currentKey, currentValue.toString(), table))
+            }
+
+            return result.sortedBy { it.key.lowercase() }
         }
-        if (currentKey != null && currentValue != null) {
-            result.add(SettingsEntry(currentKey, currentValue.toString()))
-        }
-        
-        return result.sortedBy { it.key.lowercase() }
     }
 }

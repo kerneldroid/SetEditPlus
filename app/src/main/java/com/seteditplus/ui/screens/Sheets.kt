@@ -9,17 +9,28 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -34,25 +45,32 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.seteditplus.R
 import com.seteditplus.data.SettingsRepository
+import com.seteditplus.data.SettingsTable
 import com.seteditplus.util.HapticUtil
 
 /**
- * Bottom sheet for editing an existing setting value.
+ * Bottom sheet for editing an existing setting value with copy, delete, and stock-restore actions.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditSettingSheet(
+    table: SettingsTable = SettingsTable.SYSTEM,
     key: String,
     currentValue: String,
+    stockValue: String? = null,
     onDismiss: () -> Unit,
-    onSave: (String) -> Unit
+    onSave: (String) -> Unit,
+    onDelete: (() -> Unit)? = null,
+    onRestoreStock: (() -> Unit)? = null,
+    onCopyText: ((label: String, text: String) -> Unit)? = null
 ) {
     val view = LocalView.current
-    var newValue by remember(key, currentValue) { mutableStateOf(currentValue) }
+    var newValue by remember(table, key, currentValue) { mutableStateOf(currentValue) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
@@ -93,12 +111,23 @@ fun EditSettingSheet(
                 .padding(bottom = 32.dp, top = 8.dp)
                 .verticalScroll(rememberScrollState())
         ) {
-            Text(
-                text = stringResource(R.string.title_edit),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stringResource(R.string.title_edit),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                BadgePill(
+                    text = table.displayName.uppercase(),
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -130,7 +159,90 @@ fun EditSettingSheet(
                 )
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            if (stockValue != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Original stock value: ${stockValue.ifEmpty { "(empty)" }}",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            if (onCopyText != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            HapticUtil.performClick(view)
+                            onCopyText("Key", key)
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.btn_copy_key))
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            HapticUtil.performClick(view)
+                            onCopyText("Value", newValue)
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.btn_copy_val))
+                    }
+                }
+            }
+
+            if (onRestoreStock != null || onDelete != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (onRestoreStock != null) {
+                        OutlinedButton(
+                            onClick = {
+                                HapticUtil.performConfirm(view)
+                                onRestoreStock()
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Icon(Icons.Rounded.Restore, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(stringResource(R.string.btn_revert_stock))
+                        }
+                    }
+                    if (onDelete != null) {
+                        OutlinedButton(
+                            onClick = {
+                                HapticUtil.performClick(view)
+                                onDelete()
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Icon(Icons.Rounded.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(stringResource(R.string.btn_delete))
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
 
             Button(
                 onClick = {
@@ -156,15 +268,17 @@ fun EditSettingSheet(
 }
 
 /**
- * Bottom sheet for adding a new setting.
+ * Bottom sheet for adding a new setting with an explicit target table selector.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddSettingSheet(
+    initialTable: SettingsTable = SettingsTable.SYSTEM,
     onDismiss: () -> Unit,
-    onAdd: (key: String, value: String) -> Unit
+    onAdd: (table: SettingsTable, key: String, value: String) -> Unit
 ) {
     val view = LocalView.current
+    var selectedTable by remember(initialTable) { mutableStateOf(initialTable) }
     var key by remember { mutableStateOf("") }
     var value by remember { mutableStateOf("") }
     val isKeyValid = key.isNotBlank() && SettingsRepository.isValidKey(key.trim())
@@ -192,11 +306,40 @@ fun AddSettingSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            Text(
+                text = stringResource(R.string.label_table),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                SettingsTable.entries.forEachIndexed { index, table ->
+                    SegmentedButton(
+                        selected = selectedTable == table,
+                        onClick = {
+                            HapticUtil.performClick(view)
+                            selectedTable = table
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = SettingsTable.entries.size
+                        ),
+                        label = { Text(table.displayName) }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             OutlinedTextField(
                 value = key,
                 onValueChange = { key = it },
                 label = { Text(stringResource(R.string.label_key)) },
                 isError = key.isNotBlank() && !isKeyValid,
+                supportingText = if (key.isNotBlank() && !isKeyValid) {
+                    { Text("Use only letters, numbers, _, ., :, or -") }
+                } else null,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
                 singleLine = true,
@@ -226,7 +369,7 @@ fun AddSettingSheet(
                 onClick = {
                     if (isKeyValid) {
                         HapticUtil.performConfirm(view)
-                        onAdd(key.trim(), value)
+                        onAdd(selectedTable, key.trim(), value)
                     } else {
                         HapticUtil.performReject(view)
                     }

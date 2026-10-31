@@ -1,8 +1,10 @@
 package com.seteditplus.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -16,7 +18,9 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,21 +40,26 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.FilterList
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.StarBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
@@ -82,14 +91,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.seteditplus.R
+import com.seteditplus.data.PermissionMode
 import com.seteditplus.data.SettingsTable
 import com.seteditplus.util.HapticUtil
+import com.seteditplus.viewmodel.FilterMode
 import com.seteditplus.viewmodel.SettingsViewModel
 import kotlinx.coroutines.launch
 
@@ -108,9 +121,13 @@ fun MainScreen(
     onNavigateToSettings: () -> Unit
 ) {
     val view = LocalView.current
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
     val currentTab by viewModel.currentTab
+    val filterMode by viewModel.filterMode
+    val favoriteIds by viewModel.favoriteIds
+    val permissionMode by viewModel.permissionMode
     val settings = viewModel.filteredSettings
     val isLoading by viewModel.isLoading
     val searchQuery by viewModel.searchQuery
@@ -132,6 +149,7 @@ fun MainScreen(
     var showAddSheet by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showRestoreConfirm by remember { mutableStateOf(false) }
+    var showRestoreAllConfirm by remember { mutableStateOf(false) }
     var actionKey by remember { mutableStateOf("") }
     var actionTable by remember { mutableStateOf(SettingsTable.SYSTEM) }
 
@@ -310,12 +328,24 @@ fun MainScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text(
-                                        text = stringResource(R.string.app_name),
-                                        style = MaterialTheme.typography.headlineMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.app_name),
+                                            style = MaterialTheme.typography.headlineMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        permissionMode?.let { mode ->
+                                            BadgePill(
+                                                text = if (mode == PermissionMode.ROOT) "ROOT" else "SHIZUKU",
+                                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                            )
+                                        }
+                                    }
 
                                     Row {
                                         IconButton(onClick = {
@@ -356,6 +386,7 @@ fun MainScreen(
                                     ExtendedTab.GLOBAL -> R.string.tab_global
                                     ExtendedTab.MODIFIED -> R.string.tab_modified
                                 }
+                                val modCount = viewModel.modifiedSettingsMap.size
                                 SegmentedButton(
                                     selected = currentTab == tab,
                                     onClick = {
@@ -368,8 +399,13 @@ fun MainScreen(
                                         count = ExtendedTab.entries.size
                                     ),
                                     label = {
+                                        val baseText = stringResource(labelRes)
                                         Text(
-                                            text = stringResource(labelRes),
+                                            text = if (tab == ExtendedTab.MODIFIED && modCount > 0) {
+                                                "$baseText ($modCount)"
+                                            } else {
+                                                baseText
+                                            },
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
@@ -378,25 +414,108 @@ fun MainScreen(
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
             }
 
-            AnimatedContent(
-                targetState = settings.size,
-                transitionSpec = {
-                    (fadeIn(tween(200)) + slideInVertically { -20 })
-                        .togetherWith(fadeOut(tween(200)) + slideOutVertically { 20 })
-                },
-                label = "countAnim"
-            ) { count ->
-                Text(
-                    text = stringResource(R.string.settings_count, count),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+            // Secondary toolbar: count + filter chips + Restore All button
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                AnimatedContent(
+                    targetState = settings.size,
+                    transitionSpec = {
+                        (fadeIn(tween(200)) + slideInVertically { -20 })
+                            .togetherWith(fadeOut(tween(200)) + slideOutVertically { 20 })
+                    },
+                    label = "countAnim"
+                ) { count ->
+                    Text(
+                        text = stringResource(R.string.settings_count, count),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 8.dp, end = 4.dp)
+                    )
+                }
+
+                FilterChip(
+                    selected = filterMode == FilterMode.ALL,
+                    onClick = {
+                        HapticUtil.performClick(view)
+                        viewModel.setFilterMode(FilterMode.ALL)
+                    },
+                    label = { Text(stringResource(R.string.filter_all)) }
                 )
+
+                FilterChip(
+                    selected = filterMode == FilterMode.FAVORITES_ONLY,
+                    onClick = {
+                        HapticUtil.performClick(view)
+                        viewModel.setFilterMode(
+                            if (filterMode == FilterMode.FAVORITES_ONLY) FilterMode.ALL else FilterMode.FAVORITES_ONLY
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Rounded.Star,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    },
+                    label = {
+                        val favCount = favoriteIds.size
+                        Text(
+                            if (favCount > 0) {
+                                "${stringResource(R.string.filter_favorites)} ($favCount)"
+                            } else {
+                                stringResource(R.string.filter_favorites)
+                            }
+                        )
+                    }
+                )
+
+                if (currentTab != ExtendedTab.MODIFIED) {
+                    FilterChip(
+                        selected = filterMode == FilterMode.MODIFIED_IN_TABLE,
+                        onClick = {
+                            HapticUtil.performClick(view)
+                            viewModel.setFilterMode(
+                                if (filterMode == FilterMode.MODIFIED_IN_TABLE) FilterMode.ALL else FilterMode.MODIFIED_IN_TABLE
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Rounded.FilterList,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        label = { Text(stringResource(R.string.filter_modified)) }
+                    )
+                } else if (viewModel.modifiedSettingsMap.isNotEmpty()) {
+                    FilterChip(
+                        selected = false,
+                        onClick = {
+                            HapticUtil.performClick(view)
+                            showRestoreAllConfirm = true
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Rounded.Restore,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        label = { Text(stringResource(R.string.btn_restore_all)) }
+                    )
+                }
             }
 
             if (isLoading) {
@@ -424,7 +543,7 @@ fun MainScreen(
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(
-                                    text = if (searchQuery.isNotEmpty()) {
+                                    text = if (searchQuery.isNotEmpty() || filterMode != FilterMode.ALL) {
                                         stringResource(R.string.nothing_found)
                                     } else {
                                         stringResource(R.string.no_settings)
@@ -469,6 +588,7 @@ fun MainScreen(
                                 )
 
                                 val modRecord = viewModel.getModifiedSetting(entry.table, entry.key)
+                                val isPinned = favoriteIds.contains(entry.uniqueId)
 
                                 Surface(
                                     modifier = Modifier
@@ -483,8 +603,9 @@ fun MainScreen(
                                             onClick = {
                                                 HapticUtil.performClick(view)
                                                 if (currentTab == ExtendedTab.MODIFIED && modRecord?.isDeleted == true) {
-                                                    viewModel.operationMessage.value =
-                                                        "Cannot edit a deleted item, restore it first"
+                                                    actionKey = entry.key
+                                                    actionTable = entry.table
+                                                    showRestoreConfirm = true
                                                 } else {
                                                     editKey = entry.key
                                                     editValue = entry.value
@@ -509,16 +630,49 @@ fun MainScreen(
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                                            .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
-                                        val isDeletedItem = currentTab == ExtendedTab.MODIFIED &&
-                                            modRecord?.isDeleted == true
-                                        val isAddedItem = currentTab == ExtendedTab.MODIFIED &&
-                                            modRecord != null && modRecord.stockValue == null
+                                        val isDeletedItem = modRecord?.isDeleted == true
+                                        val isAddedItem = modRecord != null && modRecord.stockValue == null && !isDeletedItem
+                                        val isModifiedItem = modRecord != null && !isDeletedItem && !isAddedItem
 
                                         Column(modifier = Modifier.weight(1f)) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                if (currentTab == ExtendedTab.MODIFIED) {
+                                                    BadgePill(
+                                                        text = entry.table.displayName.uppercase(),
+                                                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                                    )
+                                                }
+                                                when {
+                                                    isDeletedItem -> BadgePill(
+                                                        text = "DELETED",
+                                                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                                                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                                                    )
+                                                    isAddedItem -> BadgePill(
+                                                        text = "NEW",
+                                                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                                                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+                                                    )
+                                                    isModifiedItem -> BadgePill(
+                                                        text = "MODIFIED",
+                                                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                                    )
+                                                }
+                                            }
+
+                                            if (currentTab == ExtendedTab.MODIFIED || modRecord != null) {
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                            }
+
                                             Text(
                                                 text = entry.key,
                                                 style = MaterialTheme.typography.bodyMedium,
@@ -534,33 +688,62 @@ fun MainScreen(
                                             Spacer(modifier = Modifier.height(2.dp))
                                             Text(
                                                 text = if (isDeletedItem) {
-                                                    "Deleted"
+                                                    "Deleted (Stock: ${modRecord?.stockValue ?: "none"})"
                                                 } else {
                                                     entry.value.ifEmpty { stringResource(R.string.empty_value) }
                                                 },
                                                 style = MaterialTheme.typography.bodySmall,
+                                                fontFamily = FontFamily.Monospace,
                                                 color = when {
-                                                    isDeletedItem -> MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                                                    isDeletedItem -> MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
                                                     isAddedItem -> MaterialTheme.colorScheme.primary
                                                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                                                 },
-                                                maxLines = 1,
+                                                maxLines = 2,
                                                 overflow = TextOverflow.Ellipsis
                                             )
+                                            if (currentTab == ExtendedTab.MODIFIED && !isDeletedItem && modRecord?.stockValue != null) {
+                                                Spacer(modifier = Modifier.height(2.dp))
+                                                Text(
+                                                    text = "Stock: ${modRecord.stockValue.ifEmpty { "(empty)" }}",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
                                         }
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        if (currentTab == ExtendedTab.MODIFIED) {
+
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            IconButton(
+                                                onClick = {
+                                                    HapticUtil.performClick(view)
+                                                    viewModel.toggleFavorite(entry.table, entry.key)
+                                                },
+                                                modifier = Modifier.size(36.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = if (isPinned) Icons.Rounded.Star else Icons.Rounded.StarBorder,
+                                                    contentDescription = stringResource(R.string.cd_favorite),
+                                                    modifier = Modifier.size(18.dp),
+                                                    tint = if (isPinned) {
+                                                        MaterialTheme.colorScheme.primary
+                                                    } else {
+                                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                                                    }
+                                                )
+                                            }
+
                                             Icon(
-                                                imageVector = Icons.Rounded.Restore,
-                                                contentDescription = "Restore",
-                                                modifier = Modifier.size(18.dp),
-                                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                            )
-                                        } else {
-                                            Icon(
-                                                imageVector = Icons.Rounded.Edit,
+                                                imageVector = if (currentTab == ExtendedTab.MODIFIED && isDeletedItem) {
+                                                    Icons.Rounded.Restore
+                                                } else {
+                                                    Icons.Rounded.Edit
+                                                },
                                                 contentDescription = stringResource(R.string.cd_edit),
-                                                modifier = Modifier.size(18.dp),
+                                                modifier = Modifier
+                                                    .padding(end = 8.dp)
+                                                    .size(18.dp),
                                                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                                             )
                                         }
@@ -575,22 +758,42 @@ fun MainScreen(
     }
 
     if (showEditSheet) {
+        val modRecord = viewModel.getModifiedSetting(editTable, editKey)
         EditSettingSheet(
+            table = editTable,
             key = editKey,
             currentValue = editValue,
+            stockValue = modRecord?.stockValue,
             onDismiss = { showEditSheet = false },
             onSave = { newValue ->
                 viewModel.putSetting(editKey, newValue, editTable)
                 showEditSheet = false
+            },
+            onDelete = {
+                showEditSheet = false
+                actionKey = editKey
+                actionTable = editTable
+                showDeleteConfirm = true
+            },
+            onRestoreStock = if (modRecord != null) {
+                {
+                    viewModel.restoreSetting(editKey, editTable)
+                    showEditSheet = false
+                }
+            } else null,
+            onCopyText = { label, text ->
+                copyToClipboard(context, label, text)
+                viewModel.operationMessage.value = "✓ Copied $label to clipboard"
             }
         )
     }
 
     if (showAddSheet) {
         AddSettingSheet(
+            initialTable = viewModel.currentTable,
             onDismiss = { showAddSheet = false },
-            onAdd = { key, value ->
-                viewModel.addSetting(key, value, viewModel.currentTable)
+            onAdd = { targetTable, key, value ->
+                viewModel.addSetting(key, value, targetTable)
                 showAddSheet = false
             }
         )
@@ -598,7 +801,7 @@ fun MainScreen(
 
     if (showDeleteConfirm) {
         DeleteConfirmDialog(
-            key = actionKey,
+            key = "${actionTable.displayName}: $actionKey",
             onDismiss = { showDeleteConfirm = false },
             onConfirm = {
                 viewModel.deleteSetting(actionKey, actionTable)
@@ -609,7 +812,7 @@ fun MainScreen(
 
     if (showRestoreConfirm) {
         RestoreConfirmDialog(
-            key = actionKey,
+            key = "${actionTable.displayName}: $actionKey",
             onDismiss = { showRestoreConfirm = false },
             onConfirm = {
                 viewModel.restoreSetting(actionKey, actionTable)
@@ -617,6 +820,43 @@ fun MainScreen(
             }
         )
     }
+
+    if (showRestoreAllConfirm) {
+        RestoreConfirmDialog(
+            key = "all ${viewModel.modifiedSettingsMap.size} modified settings",
+            onDismiss = { showRestoreAllConfirm = false },
+            onConfirm = {
+                viewModel.restoreAllModifiedSettings()
+                showRestoreAllConfirm = false
+            }
+        )
+    }
+}
+
+@Composable
+fun BadgePill(
+    text: String,
+    containerColor: Color,
+    contentColor: Color
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(containerColor)
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = contentColor
+        )
+    }
+}
+
+private fun copyToClipboard(context: Context, label: String, text: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+    clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
 }
 
 @Composable
@@ -639,7 +879,7 @@ fun RestoreConfirmDialog(
         },
         text = {
             Text(
-                text = "Are you sure you want to restore '$key' to its original state or completely delete it if newly added?",
+                text = "Are you sure you want to restore '$key' to its original stock state (or delete it if newly added)?",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         },

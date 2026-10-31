@@ -3,37 +3,43 @@
     <string name="title_permission">SetEdit+</string>
     <string name="subtitle_permission">System Settings Editor</string>
     <string name="select_access_method">Select access method</string>
-    
+
     <string name="btn_root">Root</string>
     <string name="btn_root_desc">Full access via Superuser</string>
     <string name="btn_shizuku">Shizuku</string>
     <string name="btn_shizuku_desc">Access via ADB/Shizuku service</string>
-    
+
     <string name="err_root_unavailable">Root access not detected. Try using Shizuku.</string>
     <string name="err_shizuku_unavailable">Shizuku is not running or permission denied. Open Shizuku app and start the service.</string>
 
-    <string name="search_hint">Search settings...</string>
+    <string name="search_hint">Search keys, values, or tables...</string>
     <string name="settings_count">%1$d settings</string>
-    <string name="nothing_found">Nothing found</string>
-    <string name="no_settings">No settings</string>
+    <string name="nothing_found">No matching settings found</string>
+    <string name="no_settings">No settings in this view</string>
     <string name="empty_value">(empty)</string>
     <string name="cd_edit">Edit</string>
     <string name="cd_delete">Delete</string>
     <string name="cd_close_search">Close search</string>
     <string name="cd_search">Search</string>
     <string name="cd_add">Add setting</string>
+    <string name="cd_favorite">Toggle favorite</string>
+    <string name="cd_backup">Snapshots &amp; Tools</string>
 
     <!-- Sheets -->
-    <string name="title_edit">Edit</string>
-    <string name="title_add">Add setting</string>
+    <string name="title_edit">Edit Setting</string>
+    <string name="title_add">Add Setting</string>
+    <string name="label_table">Target Table</string>
     <string name="label_key">Key</string>
     <string name="label_value">Value</string>
-    <string name="btn_save">Save</string>
-    <string name="btn_add">Add</string>
+    <string name="btn_save">Save Changes</string>
+    <string name="btn_add">Add Setting</string>
+    <string name="btn_copy_key">Copy Key</string>
+    <string name="btn_copy_val">Copy Value</string>
+    <string name="btn_revert_stock">Revert to Stock</string>
 
     <!-- Dialog -->
     <string name="title_delete">Delete setting?</string>
-    <string name="msg_delete">Are you sure you want to delete \'%1$s\'? This action cannot be undone.</string>
+    <string name="msg_delete">Are you sure you want to delete \'%1$s\'? You can restore it later from the Modified tab.</string>
     <string name="btn_delete">Delete</string>
     <string name="btn_cancel">Cancel</string>
     <string name="btn_close">Close</string>
@@ -49,7 +55,8 @@
     <string name="menu_switch_mode">Switch Access Mode</string>
     <string name="menu_theme">App Theme</string>
     <string name="menu_autostart">Autostart Configuration</string>
-    <string name="menu_reset">Reset Preferences</string>
+    <string name="menu_safe_boot">Bootloop Safe-Guard</string>
+    <string name="menu_reset">Reset All to Stock</string>
 
     <!-- Themes -->
     <string name="theme_system">System</string>
@@ -62,4 +69,10 @@
     <string name="tab_secure">Secure</string>
     <string name="tab_global">Global</string>
     <string name="tab_modified">Modified</string>
+
+    <!-- Filters -->
+    <string name="filter_all">All</string>
+    <string name="filter_favorites">Favorites</string>
+    <string name="filter_modified">Modified</string>
+    <string name="btn_restore_all">Restore All</string>
 </resources>

@@ -3,6 +3,7 @@ package com.seteditplus.data
 import android.content.Context
 import android.util.Base64
 import androidx.core.content.edit
+import org.json.JSONArray
 import org.json.JSONObject
 
 enum class ThemeMode {
@@ -26,19 +27,23 @@ data class ModifiedSetting(
     val uniqueId: String
         get() = "${settingsTable.name}:$key"
 
+    fun toJsonObject(): JSONObject {
+        return JSONObject().apply {
+            put("table", settingsTable.name)
+            put("key", key)
+            put("value", value)
+            put("hasStockValue", stockValue != null)
+            if (stockValue != null) {
+                put("stockValue", stockValue)
+            }
+            put("isDeleted", isDeleted)
+            put("updatedAt", updatedAt)
+        }
+    }
+
     fun toPrefString(): String {
         return try {
-            val json = JSONObject()
-            json.put("table", settingsTable.name)
-            json.put("key", key)
-            json.put("value", value)
-            json.put("hasStockValue", stockValue != null)
-            if (stockValue != null) {
-                json.put("stockValue", stockValue)
-            }
-            json.put("isDeleted", isDeleted)
-            json.put("updatedAt", updatedAt)
-            json.toString()
+            toJsonObject().toString()
         } catch (_: Exception) {
             val encKey = Base64.encodeToString(key.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
             val encValue = Base64.encodeToString(value.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
@@ -52,29 +57,37 @@ data class ModifiedSetting(
     companion object {
         fun uniqueKey(table: SettingsTable, key: String): String = "${table.name}:$key"
 
+        fun fromJsonObject(json: JSONObject): ModifiedSetting? {
+            return try {
+                val table = SettingsTable.fromNameOrDefault(json.optString("table")).name
+                val key = json.getString("key").trim()
+                if (!SettingsRepository.isValidKey(key)) return null
+                val value = json.optString("value", "")
+                val hasStock = if (json.has("hasStockValue")) {
+                    json.optBoolean("hasStockValue", false)
+                } else {
+                    json.has("stockValue") && !json.isNull("stockValue")
+                }
+                val stockValue = if (hasStock) json.optString("stockValue") else null
+                val isDeleted = json.optBoolean("isDeleted", false)
+                val updatedAt = json.optLong("updatedAt", System.currentTimeMillis())
+                ModifiedSetting(
+                    table = table,
+                    key = key,
+                    value = value,
+                    stockValue = stockValue,
+                    isDeleted = isDeleted,
+                    updatedAt = updatedAt
+                )
+            } catch (_: Exception) {
+                null
+            }
+        }
+
         fun fromPrefString(str: String): ModifiedSetting? {
             if (str.startsWith("{")) {
                 return try {
-                    val json = JSONObject(str)
-                    val table = SettingsTable.fromNameOrDefault(json.optString("table")).name
-                    val key = json.getString("key")
-                    val value = json.optString("value", "")
-                    val hasStock = if (json.has("hasStockValue")) {
-                        json.optBoolean("hasStockValue", false)
-                    } else {
-                        json.has("stockValue") && !json.isNull("stockValue")
-                    }
-                    val stockValue = if (hasStock) json.optString("stockValue") else null
-                    val isDeleted = json.optBoolean("isDeleted", false)
-                    val updatedAt = json.optLong("updatedAt", 0L)
-                    ModifiedSetting(
-                        table = table,
-                        key = key,
-                        value = value,
-                        stockValue = stockValue,
-                        isDeleted = isDeleted,
-                        updatedAt = updatedAt
-                    )
+                    fromJsonObject(JSONObject(str))
                 } catch (_: Exception) {
                     null
                 }
@@ -119,6 +132,7 @@ data class ModifiedSetting(
 
 class PreferencesRepository(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val lock = Any()
 
     fun getThemeMode(): ThemeMode {
         val name = prefs.getString(KEY_THEME_MODE, ThemeMode.SYSTEM.name) ?: ThemeMode.SYSTEM.name
@@ -157,20 +171,83 @@ class PreferencesRepository(context: Context) {
         prefs.edit { putBoolean(KEY_AUTOSTART, enabled) }
     }
 
-    fun getModifiedSettings(): List<ModifiedSetting> {
-        val set = prefs.getStringSet(KEY_MODIFIED_SETTINGS, emptySet()) ?: emptySet()
-        return set.mapNotNull { ModifiedSetting.fromPrefString(it) }
+    fun isSafeBootGuardEnabled(): Boolean {
+        return prefs.getBoolean(KEY_SAFE_BOOT_GUARD, true)
+    }
+
+    fun setSafeBootGuardEnabled(enabled: Boolean) {
+        prefs.edit { putBoolean(KEY_SAFE_BOOT_GUARD, enabled) }
+    }
+
+    fun recordBootAttemptAndCheckSafe(): Boolean = synchronized(lock) {
+        if (!isSafeBootGuardEnabled()) return true
+        val now = System.currentTimeMillis()
+        val lastBootTs = prefs.getLong(KEY_LAST_BOOT_TS, 0L)
+        val rapidBootCount = if (lastBootTs > 0L && (now - lastBootTs) < RAPID_REBOOT_WINDOW_MS) {
+            prefs.getInt(KEY_RAPID_BOOT_COUNT, 0) + 1
+        } else {
+            1
+        }
+        prefs.edit {
+            putLong(KEY_LAST_BOOT_TS, now)
+            putInt(KEY_RAPID_BOOT_COUNT, rapidBootCount)
+        }
+        if (rapidBootCount >= MAX_RAPID_REBOOTS_BEFORE_TRIP) {
+            prefs.edit {
+                putBoolean(KEY_AUTOSTART, false)
+                putBoolean(KEY_BOOT_GUARD_TRIPPED, true)
+                putInt(KEY_RAPID_BOOT_COUNT, 0)
+            }
+            return false
+        }
+        return true
+    }
+
+    fun consumeBootGuardTrippedFlag(): Boolean = synchronized(lock) {
+        val tripped = prefs.getBoolean(KEY_BOOT_GUARD_TRIPPED, false)
+        if (tripped) {
+            prefs.edit {
+                putBoolean(KEY_BOOT_GUARD_TRIPPED, false)
+                putInt(KEY_RAPID_BOOT_COUNT, 0)
+            }
+        }
+        tripped
+    }
+
+    fun getFavoriteIds(): Set<String> = synchronized(lock) {
+        (prefs.getStringSet(KEY_FAVORITE_SETTINGS, emptySet()) ?: emptySet()).toSet()
+    }
+
+    fun toggleFavorite(table: SettingsTable, key: String): Boolean = synchronized(lock) {
+        val id = ModifiedSetting.uniqueKey(table, key)
+        val current = getFavoriteIds().toMutableSet()
+        val added = if (current.contains(id)) {
+            current.remove(id)
+            false
+        } else {
+            current.add(id)
+            true
+        }
+        prefs.edit { putStringSet(KEY_FAVORITE_SETTINGS, current.toSet()) }
+        added
+    }
+
+    fun setFavoriteIds(ids: Set<String>) = synchronized(lock) {
+        prefs.edit { putStringSet(KEY_FAVORITE_SETTINGS, ids.toSet()) }
+    }
+
+    fun getModifiedSettings(): List<ModifiedSetting> = synchronized(lock) {
+        val set = (prefs.getStringSet(KEY_MODIFIED_SETTINGS, emptySet()) ?: emptySet()).toSet()
+        set.mapNotNull { ModifiedSetting.fromPrefString(it) }
             .sortedWith(compareBy<ModifiedSetting> { it.settingsTable.ordinal }.thenBy { it.key.lowercase() })
     }
 
-    fun addModifiedSetting(setting: ModifiedSetting) {
+    fun addModifiedSetting(setting: ModifiedSetting) = synchronized(lock) {
         val normalizedTable = setting.settingsTable.name
         val normalized = setting.copy(table = normalizedTable)
         val current = getModifiedSettings().toMutableList()
         current.removeAll { it.settingsTable.name == normalizedTable && it.key == normalized.key }
 
-        // If the user edited the setting back to its exact stock value and it is not deleted,
-        // remove it from modified tracking instead of storing a redundant entry.
         val isRevertedToStock = !normalized.isDeleted &&
             normalized.stockValue != null &&
             normalized.value == normalized.stockValue
@@ -183,7 +260,25 @@ class PreferencesRepository(context: Context) {
         }
     }
 
-    fun removeModifiedSetting(table: String, key: String) {
+    fun saveModifiedSettingsBatch(settings: List<ModifiedSetting>) = synchronized(lock) {
+        val merged = getModifiedSettings().associateBy { it.uniqueId }.toMutableMap()
+        for (item in settings) {
+            val normalized = item.copy(table = item.settingsTable.name)
+            val isRevertedToStock = !normalized.isDeleted &&
+                normalized.stockValue != null &&
+                normalized.value == normalized.stockValue
+            if (isRevertedToStock) {
+                merged.remove(normalized.uniqueId)
+            } else {
+                merged[normalized.uniqueId] = normalized
+            }
+        }
+        prefs.edit {
+            putStringSet(KEY_MODIFIED_SETTINGS, merged.values.map { it.toPrefString() }.toSet())
+        }
+    }
+
+    fun removeModifiedSetting(table: String, key: String) = synchronized(lock) {
         val normalizedTable = SettingsTable.fromNameOrDefault(table).name
         val current = getModifiedSettings().toMutableList()
         current.removeAll { it.settingsTable.name == normalizedTable && it.key == key }
@@ -192,12 +287,60 @@ class PreferencesRepository(context: Context) {
         }
     }
 
-    fun clearAllModifiedSettings() {
+    fun clearAllModifiedSettings() = synchronized(lock) {
         prefs.edit { remove(KEY_MODIFIED_SETTINGS) }
     }
 
-    fun resetAllPreferences() {
+    fun resetAllPreferences() = synchronized(lock) {
         prefs.edit { clear() }
+    }
+
+    /**
+     * Exports all modified settings and favorites into a structured JSON snapshot string.
+     */
+    fun exportSnapshotJson(): String {
+        val root = JSONObject()
+        root.put("format", "seteditplus-snapshot")
+        root.put("version", 2)
+        root.put("exportedAt", System.currentTimeMillis())
+
+        val modsArray = JSONArray()
+        getModifiedSettings().forEach { mod ->
+            modsArray.put(mod.toJsonObject())
+        }
+        root.put("modifiedSettings", modsArray)
+
+        val favArray = JSONArray()
+        getFavoriteIds().sorted().forEach { fav ->
+            favArray.put(fav)
+        }
+        root.put("favorites", favArray)
+        return root.toString(2)
+    }
+
+    data class SnapshotPayload(
+        val modifiedSettings: List<ModifiedSetting>,
+        val favorites: Set<String>
+    )
+
+    fun parseSnapshotJson(rawJson: String): SnapshotPayload {
+        val root = JSONObject(rawJson.trim())
+        val modsArray = root.optJSONArray("modifiedSettings") ?: JSONArray()
+        val parsedMods = mutableListOf<ModifiedSetting>()
+        for (i in 0 until modsArray.length()) {
+            val obj = modsArray.optJSONObject(i) ?: continue
+            ModifiedSetting.fromJsonObject(obj)?.let { parsedMods.add(it) }
+        }
+
+        val favArray = root.optJSONArray("favorites") ?: JSONArray()
+        val parsedFavs = mutableSetOf<String>()
+        for (i in 0 until favArray.length()) {
+            val item = favArray.optString(i).trim()
+            if (item.contains(":")) {
+                parsedFavs.add(item)
+            }
+        }
+        return SnapshotPayload(parsedMods, parsedFavs)
     }
 
     companion object {
@@ -205,6 +348,14 @@ class PreferencesRepository(context: Context) {
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_PERMISSION_MODE = "permission_mode"
         private const val KEY_AUTOSTART = "autostart"
+        private const val KEY_SAFE_BOOT_GUARD = "safe_boot_guard"
+        private const val KEY_LAST_BOOT_TS = "last_boot_ts"
+        private const val KEY_RAPID_BOOT_COUNT = "rapid_boot_count"
+        private const val KEY_BOOT_GUARD_TRIPPED = "boot_guard_tripped"
         private const val KEY_MODIFIED_SETTINGS = "modified_settings"
+        private const val KEY_FAVORITE_SETTINGS = "favorite_settings"
+
+        private const val RAPID_REBOOT_WINDOW_MS = 180_000L // 3 minutes
+        private const val MAX_RAPID_REBOOTS_BEFORE_TRIP = 3
     }
 }

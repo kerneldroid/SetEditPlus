@@ -8,7 +8,6 @@ import com.seteditplus.data.PermissionChecker
 import com.seteditplus.data.PermissionMode
 import com.seteditplus.data.PreferencesRepository
 import com.seteditplus.data.SettingsRepository
-import com.seteditplus.data.SettingsTable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -24,11 +23,16 @@ class BootReceiver : BroadcastReceiver() {
         val prefs = PreferencesRepository(context)
         if (!prefs.isAutostartEnabled()) return
 
+        if (action == Intent.ACTION_BOOT_COMPLETED && !prefs.recordBootAttemptAndCheckSafe()) {
+            Log.w(TAG, "Safe Boot Guard tripped due to rapid consecutive reboots! Autostart disabled.")
+            return
+        }
+
         val mode = prefs.getPermissionMode() ?: return
         val modified = prefs.getModifiedSettings()
         if (modified.isEmpty()) return
 
-        Log.d(TAG, "Applying ${modified.size} modified settings via $mode (trigger=$action)")
+        Log.d(TAG, "Applying ${modified.size} modified settings in batch via $mode (trigger=$action)")
 
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
@@ -40,20 +44,22 @@ class BootReceiver : BroadcastReceiver() {
                 }
 
                 val repo = SettingsRepository(context, mode)
-                for (setting in modified) {
-                    try {
-                        val table = SettingsTable.fromNameOrDefault(setting.table)
-                        if (setting.isDeleted) {
-                            val success = repo.delete(table, setting.key)
-                            Log.d(TAG, "Re-deleted ${table.name}/${setting.key} ($success)")
-                        } else {
-                            val success = repo.put(table, setting.key, setting.value)
-                            Log.d(TAG, "Restored ${table.name}/${setting.key}=${setting.value} ($success)")
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to restore ${setting.key}", e)
+                val operations = modified.map { setting ->
+                    val table = setting.settingsTable
+                    if (setting.isDeleted) {
+                        SettingsRepository.BatchOperation.Delete(table, setting.key)
+                    } else {
+                        SettingsRepository.BatchOperation.Put(table, setting.key, setting.value)
                     }
                 }
+                val summary = repo.executeBatch(operations)
+                Log.i(
+                    TAG,
+                    "Boot batch restore completed: ${summary.successCount}/${summary.totalCount} succeeded " +
+                        "(failures=${summary.failureCount})"
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Unexpected error during boot settings restore", e)
             } finally {
                 pendingResult.finish()
             }

@@ -35,6 +35,8 @@ android {
                 storePassword = localProps.getProperty("RELEASE_STORE_PASSWORD")
                 keyAlias = localProps.getProperty("RELEASE_KEY_ALIAS")
                 keyPassword = localProps.getProperty("RELEASE_KEY_PASSWORD")
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }

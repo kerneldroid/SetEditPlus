@@ -1,0 +1,126 @@
+name: Android CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+      RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+      RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 27
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "27"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Run unit tests
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Decode release keystore
+        if: github.event_name != 'pull_request'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error title=Missing secret::RELEASE_KEYSTORE_BASE64 is not configured"
+            exit 1
+          fi
+          KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+          chmod 600 "$KEYSTORE_PATH"
+          echo "RELEASE_STORE_FILE=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+
+      - name: Build debug APK
+        if: github.event_name == 'pull_request'
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Build signed release APK
+        if: github.event_name != 'pull_request'
+        run: ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Verify release signature
+        if: github.event_name != 'pull_request'
+        run: |
+          APK="app/build/outputs/apk/release/app-release.apk"
+          APKSIGNER="$ANDROID_HOME/build-tools/37.0.0/apksigner"
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+          FINGERPRINT=$("$APKSIGNER" verify --print-certs "$APK" \
+            | awk -F': ' '/certificate SHA-256 digest/ {print $NF; exit}')
+          EXPECTED="4ed9db9127fe3b0b6463e2da590465bf88702b8abffde700315600e97faebc68"
+          echo "Signer SHA-256: $FINGERPRINT"
+          if [ "$FINGERPRINT" != "$EXPECTED" ]; then
+            echo "::error::APK is not signed with the SetEditPlus release key"
+            exit 1
+          fi
+
+      - name: Stage APK
+        run: |
+          mkdir -p artifacts
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            cp app/build/outputs/apk/debug/app-debug.apk artifacts/seteditplus-debug.apk
+          else
+            cp app/build/outputs/apk/release/app-release.apk artifacts/seteditplus-release.apk
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: seteditplus-apk
+          path: artifacts/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v8
+        with:
+          name: seteditplus-apk
+          path: artifacts
+
+      - name: Attach APK to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          VERSION="${TAG#v}"
+          ASSET="artifacts/setedit-${VERSION}_release.apk"
+          mv artifacts/seteditplus-release.apk "$ASSET"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$ASSET" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" "$ASSET" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "SetEditPlus ${VERSION}" \
+              --generate-notes
+          fi

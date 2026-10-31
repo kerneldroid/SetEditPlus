@@ -5,6 +5,26 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val localProps = Properties().apply {
+    val localPropsFile = rootProject.file("local.properties")
+    if (localPropsFile.exists()) {
+        localPropsFile.inputStream().use { load(it) }
+    }
+}
+
+// Signing material can come from local.properties (local builds) or environment
+// variables (CI), so no secret has to be written into the repository.
+fun releaseSetting(name: String): String? =
+    localProps.getProperty(name) ?: System.getenv(name)
+
+val releaseStoreFile = file(releaseSetting("RELEASE_STORE_FILE") ?: "release.jks")
+val releaseStorePassword = releaseSetting("RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = releaseSetting("RELEASE_KEY_ALIAS")
+val releaseKeyPassword = releaseSetting("RELEASE_KEY_PASSWORD")
+val hasReleaseKeystore = releaseStoreFile.exists() &&
+    !releaseStorePassword.isNullOrBlank() &&
+    !releaseKeyAlias.isNullOrBlank()
+
 android {
     namespace = "com.seteditplus"
     compileSdk = 37
@@ -18,23 +38,13 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    val localProps = Properties().apply {
-        val localPropsFile = rootProject.file("local.properties")
-        if (localPropsFile.exists()) {
-            localPropsFile.inputStream().use { load(it) }
-        }
-    }
-    val releaseStoreFile = file(localProps.getProperty("RELEASE_STORE_FILE", "release.jks"))
-    val hasReleaseKeystore = releaseStoreFile.exists() &&
-        !localProps.getProperty("RELEASE_STORE_PASSWORD").isNullOrBlank()
-
     signingConfigs {
         if (hasReleaseKeystore) {
             create("release") {
                 storeFile = releaseStoreFile
-                storePassword = localProps.getProperty("RELEASE_STORE_PASSWORD")
-                keyAlias = localProps.getProperty("RELEASE_KEY_ALIAS")
-                keyPassword = localProps.getProperty("RELEASE_KEY_PASSWORD")
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
                 enableV2Signing = true
                 enableV3Signing = true
             }
@@ -43,11 +53,7 @@ android {
 
     buildTypes {
         release {
-            signingConfig = if (hasReleaseKeystore) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
-            }
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -69,6 +75,16 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+}
+
+// Never let a release artifact fall back to the debug signing key.
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    doFirst {
+        check(hasReleaseKeystore) {
+            "Release signing is not configured. Set RELEASE_STORE_FILE, RELEASE_STORE_PASSWORD, " +
+                "RELEASE_KEY_ALIAS and RELEASE_KEY_PASSWORD in local.properties or the environment."
         }
     }
 }

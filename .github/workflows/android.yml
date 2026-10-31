@@ -28,11 +28,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up JDK 27
+      - name: Set up JDK 21
         uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: "27"
+          java-version: "21"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6

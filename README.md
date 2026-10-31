@@ -1,26 +1,22 @@
-# SetEditPlus
+# SetEditPlus 2.0
 
-Powerful Android Settings Editor (System, Secure, Global) with Shizuku and Root support.
+Powerful Android Settings Editor (`System`, `Secure`, `Global`) with **Shizuku** and **Root** support.
 
-## Features
-- **Modern UI**: Full Material 3 (Material Expressive) support with OLED Dark mode.
-- **Multiple Permission Modes**: Support for **Shizuku** and **Root**.
-- **Safe Editing**: Automatic tracking of modified settings with "Modified" tab for easy rollback.
-- **Boot Persistence**: Option to re-apply modified settings automatically after device reboot.
-- **Android 15-17 Support**: Optimized for latest Android versions including adaptive icons and Edge-to-Edge.
+## Highlights & Features
+- **Material 3 Expressive UI**: Clean, adaptive interface with **OLED Pure Black** mode, table/status badges (`SYSTEM` / `SECURE` / `GLOBAL`, `MODIFIED` / `NEW` / `DELETED`), and stock-vs-current value diffing.
+- **Dual Privileged Backends**: Works seamlessly with both **Root (`su`)** and **Shizuku** with strict exit-code and `stderr` verification.
+- **Single-Shell Batch Execution Engine**: Executes boot restoration, bulk rollbacks, and snapshot imports inside a single shell session instead of spawning `O(N)` processes.
+- **Smart Value Inspector & Safety Guard**:
+  - Automatically detects setting types (`Boolean 0/1`, `Boolean true/false`, `Integer`, `Decimal/Scale`, `Component/Package`, `URI`, `String`) and category tags.
+  - Provides one-tap **Quick Presets** for animation scales, display refresh rates, font scales, screen timeouts, and boolean flags.
+  - Guards against brick/SystemUI-crash values (e.g., out-of-range forced DPI or invalid animation scales) before writing.
+- **Bootloop Safe-Guard**: Automatically trips and disables Autostart if 3 rapid consecutive reboots are detected within 3 minutes.
+- **Snapshots & Shell Script Studio**:
+  - Export and import full JSON snapshots (including stock rollback values and pinned favorites) via Storage Access Framework or clipboard, with live diff preview before applying.
+  - Generate standalone POSIX `.sh` scripts (`settings put` / `settings delete`) for `adb shell` or Magisk/KernelSU boot scripts.
+- **Pinned Favorites & Instant Filtering**: Pin frequently used settings across tables and filter by `All`, `Favorites`, or `Modified`.
 
-## Security
-- **Command Injection Protection**: All shell commands are properly escaped.
-- **Lifecycle Management**: Robust background processing using `goAsync()`.
-
-## Build
-- **JDK**: 26+
-- **Gradle**: 9.7+ (Nightly)
-- **Target SDK**: 37 (Android 17)
-
-## Credits
-Developed for power users who need direct control over Android system parameters. 
-
-## Support
-
-- Issues, PR are closed. It's a pet project. 
+## Build Requirements
+- **JDK**: 21+
+- **Compile / Target SDK**: 37 (Android 17)
+- **Min SDK**: 26 (Android 8.0)

@@ -36,7 +36,6 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -48,6 +47,7 @@ import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FilterList
+import androidx.compose.material.icons.rounded.ImportExport
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
@@ -147,6 +147,7 @@ fun MainScreen(
     var editTable by remember { mutableStateOf(SettingsTable.SYSTEM) }
 
     var showAddSheet by remember { mutableStateOf(false) }
+    var showSnapshotSheet by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showRestoreConfirm by remember { mutableStateOf(false) }
     var showRestoreAllConfirm by remember { mutableStateOf(false) }
@@ -355,6 +356,17 @@ fun MainScreen(
                                             Icon(
                                                 imageVector = Icons.Rounded.Search,
                                                 contentDescription = stringResource(R.string.cd_search),
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+
+                                        IconButton(onClick = {
+                                            HapticUtil.performClick(view)
+                                            showSnapshotSheet = true
+                                        }) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.ImportExport,
+                                                contentDescription = stringResource(R.string.cd_backup),
                                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
@@ -795,6 +807,17 @@ fun MainScreen(
             onAdd = { targetTable, key, value ->
                 viewModel.addSetting(key, value, targetTable)
                 showAddSheet = false
+            }
+        )
+    }
+
+    if (showSnapshotSheet) {
+        SnapshotSheet(
+            viewModel = viewModel,
+            onDismiss = { showSnapshotSheet = false },
+            onCopyText = { label, text ->
+                copyToClipboard(context, label, text)
+                viewModel.operationMessage.value = "✓ Copied $label to clipboard"
             }
         )
     }

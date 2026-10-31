@@ -1,6 +1,7 @@
 package com.seteditplus.ui.screens
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,10 +19,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Restore
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -31,6 +35,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -51,10 +56,13 @@ import androidx.compose.ui.unit.dp
 import com.seteditplus.R
 import com.seteditplus.data.SettingsRepository
 import com.seteditplus.data.SettingsTable
+import com.seteditplus.domain.SettingAnalyzer
+import com.seteditplus.domain.SettingRiskLevel
 import com.seteditplus.util.HapticUtil
 
 /**
- * Bottom sheet for editing an existing setting value with copy, delete, and stock-restore actions.
+ * Bottom sheet for editing an existing setting value with Smart Value Inspector,
+ * interactive preset chips, safety validation warnings, and stock-restore actions.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,6 +79,12 @@ fun EditSettingSheet(
 ) {
     val view = LocalView.current
     var newValue by remember(table, key, currentValue) { mutableStateOf(currentValue) }
+    val inspection = remember(table, key, currentValue) {
+        SettingAnalyzer.inspect(table, key, currentValue)
+    }
+    val validation = remember(table, key, newValue, currentValue) {
+        SettingAnalyzer.validate(table, key, newValue, currentValue)
+    }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
@@ -122,14 +136,30 @@ fun EditSettingSheet(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                BadgePill(
-                    text = table.displayName.uppercase(),
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    inspection.categoryHint?.let { category ->
+                        BadgePill(
+                            text = category.uppercase(),
+                            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                    }
+                    BadgePill(
+                        text = table.displayName.uppercase(),
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Detected Type: ${inspection.valueType.label}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
 
             OutlinedTextField(
                 value = key,
@@ -151,6 +181,10 @@ fun EditSettingSheet(
                 value = newValue,
                 onValueChange = { newValue = it },
                 label = { Text(stringResource(R.string.label_value)) },
+                isError = !validation.isValid,
+                supportingText = if (!validation.isValid && validation.errorMessage != null) {
+                    { Text(validation.errorMessage) }
+                } else null,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
                 colors = OutlinedTextFieldDefaults.colors(
@@ -158,6 +192,42 @@ fun EditSettingSheet(
                     unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
                 )
             )
+
+            if (inspection.suggestedPresets.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "Quick Presets",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    inspection.suggestedPresets.forEach { (presetVal, presetLabel) ->
+                        FilterChip(
+                            selected = newValue.trim() == presetVal,
+                            onClick = {
+                                HapticUtil.performClick(view)
+                                newValue = presetVal
+                            },
+                            label = { Text(presetLabel) }
+                        )
+                    }
+                    if (stockValue != null && inspection.suggestedPresets.none { it.first == stockValue }) {
+                        AssistChip(
+                            onClick = {
+                                HapticUtil.performClick(view)
+                                newValue = stockValue
+                            },
+                            label = { Text("Stock ($stockValue)") }
+                        )
+                    }
+                }
+            }
 
             if (stockValue != null) {
                 Spacer(modifier = Modifier.height(8.dp))
@@ -167,6 +237,47 @@ fun EditSettingSheet(
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+
+            val warningText = validation.warningMessage
+            if (warningText != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                val isHighRisk = inspection.riskLevel == SettingRiskLevel.DANGEROUS
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (isHighRisk) {
+                        MaterialTheme.colorScheme.errorContainer
+                    } else {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.WarningAmber,
+                            contentDescription = null,
+                            tint = if (isHighRisk) {
+                                MaterialTheme.colorScheme.onErrorContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSecondaryContainer
+                            },
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = warningText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isHighRisk) {
+                                MaterialTheme.colorScheme.onErrorContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSecondaryContainer
+                            }
+                        )
+                    }
+                }
             }
 
             if (onCopyText != null) {
@@ -246,9 +357,14 @@ fun EditSettingSheet(
 
             Button(
                 onClick = {
-                    HapticUtil.performConfirm(view)
-                    onSave(newValue)
+                    if (validation.isValid) {
+                        HapticUtil.performConfirm(view)
+                        onSave(newValue)
+                    } else {
+                        HapticUtil.performReject(view)
+                    }
                 },
+                enabled = validation.isValid,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
@@ -268,7 +384,7 @@ fun EditSettingSheet(
 }
 
 /**
- * Bottom sheet for adding a new setting with an explicit target table selector.
+ * Bottom sheet for adding a new setting with an explicit target table selector and safety validation.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -282,6 +398,9 @@ fun AddSettingSheet(
     var key by remember { mutableStateOf("") }
     var value by remember { mutableStateOf("") }
     val isKeyValid = key.isNotBlank() && SettingsRepository.isValidKey(key.trim())
+    val validation = remember(selectedTable, key, value) {
+        if (key.isBlank()) null else SettingAnalyzer.validate(selectedTable, key, value)
+    }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
@@ -355,6 +474,10 @@ fun AddSettingSheet(
                 value = value,
                 onValueChange = { value = it },
                 label = { Text(stringResource(R.string.label_value)) },
+                isError = validation?.isValid == false,
+                supportingText = if (validation?.isValid == false && validation.errorMessage != null) {
+                    { Text(validation.errorMessage) }
+                } else null,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
                 colors = OutlinedTextFieldDefaults.colors(
@@ -365,9 +488,11 @@ fun AddSettingSheet(
 
             Spacer(modifier = Modifier.height(24.dp))
 
+            val canSubmit = isKeyValid && (validation?.isValid != false)
+
             Button(
                 onClick = {
-                    if (isKeyValid) {
+                    if (canSubmit) {
                         HapticUtil.performConfirm(view)
                         onAdd(selectedTable, key.trim(), value)
                     } else {
@@ -381,7 +506,7 @@ fun AddSettingSheet(
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary
                 ),
-                enabled = isKeyValid
+                enabled = canSubmit
             ) {
                 Text(
                     text = stringResource(R.string.btn_add),

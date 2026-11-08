@@ -3,6 +3,7 @@ package com.seteditplus.data
 import android.content.Context
 import android.util.Log
 import rikka.shizuku.Shizuku
+import rikka.shizuku.ShizukuRemoteProcess
 import java.util.concurrent.TimeUnit
 
 /**
@@ -218,7 +219,16 @@ class SettingsRepository(
         } catch (_: Exception) {
             ""
         }
-        val finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+        // Process.waitFor(timeout) polls exitValue(). For ShizukuRemoteProcess that poll
+        // crosses Binder, where the server's IllegalThreadStateException arrives as
+        // IllegalArgumentException and escapes the timeout loop, surfacing as
+        // "Process (pid=...) has not exited". Shizuku exposes a timeout-aware call that
+        // handles this on the server side.
+        val finished = if (process is ShizukuRemoteProcess) {
+            process.waitForTimeout(timeoutSeconds, TimeUnit.SECONDS)
+        } else {
+            process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+        }
         if (!finished) {
             process.destroyForcibly()
             stderrThread.join(500)

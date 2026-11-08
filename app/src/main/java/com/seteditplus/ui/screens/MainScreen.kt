@@ -99,7 +99,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.seteditplus.R
-import com.seteditplus.data.PermissionMode
 import com.seteditplus.data.SettingsTable
 import com.seteditplus.util.HapticUtil
 import com.seteditplus.viewmodel.FilterMode
@@ -127,7 +126,6 @@ fun MainScreen(
     val currentTab by viewModel.currentTab
     val filterMode by viewModel.filterMode
     val favoriteIds by viewModel.favoriteIds
-    val permissionMode by viewModel.permissionMode
     val settings = viewModel.filteredSettings
     val isLoading by viewModel.isLoading
     val searchQuery by viewModel.searchQuery
@@ -339,13 +337,6 @@ fun MainScreen(
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.onSurface
                                         )
-                                        permissionMode?.let { mode ->
-                                            BadgePill(
-                                                text = if (mode == PermissionMode.ROOT) "ROOT" else "SHIZUKU",
-                                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                                            )
-                                        }
                                     }
 
                                     Row {

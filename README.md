@@ -20,3 +20,7 @@ Powerful Android Settings Editor (`System`, `Secure`, `Global`) with **Shizuku**
 - **JDK**: 21+
 - **Compile / Target SDK**: 37 (Android 17)
 - **Min SDK**: 26 (Android 8.0)
+
+
+## Warning
+This is a pet project that I **maintain** very rarely (only when I need it myself). PRs and Issues are **closed**.
